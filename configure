@@ -1,0 +1,15 @@
+#!/bin/sh
+set -x
+DIRS=`ls $1/`
+for i in $DIRS
+do
+	if [ -d $PWD/$1/$i ];
+	then
+		if [ "$2"_ = "clean"_ ];
+		then
+		cd $PWD/$1/$i && make clean && rm -f Makefile && cd -
+		else
+		cp ./Makefile $PWD/$1/$i -f 
+		fi
+	fi
+done
