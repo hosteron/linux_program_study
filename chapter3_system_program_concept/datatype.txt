@@ -1,0 +1,42 @@
+blkcnt_t	有符号整型	文件块数量
+blksize_t	有符号整型	文件块大小
+cc_t	无符号整型	终端特殊字符
+clock_t	整型或浮点型实数	以时钟周期计量的系统时间
+clockid_t	运算类型之一	针对POSIX.1b时钟和定时器函数的时钟标识符
+comp_t	SUSv3未做规范	经由压缩处理的时钟周期
+dev_t	运算类型之一	设备号，包含主，次设备号
+DIR	无类型要求	目录流
+fd_set	结构类型	select()中的文件描述符集合
+fsblkcnt_t	无符号整型	文件系统块数量
+fsfilcnt_t	无符号整型	文件数量
+gid_t	整型	数值型组标示符
+id_t	整形	用以存放标识符的通用类型，其大小至少可放置pid_t,uid_t和gid_t类型
+in_addr_t	32位无符号整型	IPv4地址
+in_port_t	16位无符号整型	IP端口号
+ino_t	无符号整型	文件i-node号
+key_t	运算类型之一	system V IPC 键
+mode_t	整型	文件权限及类型
+mqd_t	无类型要求	但不能为数组类型，POSIX消息队列描述符
+msglen_t	无符号整型	System V消息队列所允许的字节数
+msgqnum_t	无符号整型	System V消息队列中消息数量
+nfds_t	无符号整型	poll()中的文件描述符数量
+nlink_t	整型	文件的（硬）链接数量
+off_t	有符号整型	文件偏移量或大小
+pid_t	有符号整型	进程id,进程组id或会话id
+ptrdiff_t	有符号整型	两指针差值，为有符号整型
+rlim_t	无符号整型	资源限制
+sa_family_t	无符号整型	套接字地址族
+shmatt_t	无符号整型	与System V共享内存段相连的进程数量
+sig_atomic_t	整型	可惊醒原子访问的数据类型
+siginfo_t	结构类型	信号起源的相关信息
+sigset_t	整型或结构类型	信号集合
+size_t	无符号整型	对象大小（以字节计）
+socklen_t	至少32位的整型	套接字地址结构大小（以字节数计）
+speed_t	无符号整型	终端线速度
+ssize_t	有符号整型	字节数或（为负数时）标示错误
+stack_t	结构类型	对备选信号栈的描述
+suseconds_t	有符号整型	范围为[-1,1000000]，微妙级的时间结构
+tcflag_t	无符号整型	终端模式标志位的位掩码
+time_t	整型或浮点型实数	自所谓纪元(Epoch)开始，以秒计的日历时间
+timer_t	运算类型之一	POSXI.1b间隔定时器函数的定时器标识符
+uid_t	整型	数值型用户标示符
