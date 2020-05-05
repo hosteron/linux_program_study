@@ -1,0 +1,147 @@
+打开文件的状态标志
+int flags, accessMode;
+flags = fcntl(fd, F_GETFL);
+if(flags == -1)
+	errExit("fcntl");
+if(flags & O_SYNC)
+	printf("writes are synchronized\n");
+O_RDONLY,O_WRONYL,O_RDWR,这３个常量不与打开文件状态标志中的单个比特位相对应，需要特定的位掩码O_ACCMODE与flags相与
+accessmode = flags & O_ACCMODE
+if(accessmode == O_WRONLY || accessmode == O_RDWR)
+	printf("file is writeable\n");
+使用fcntl的F_SETFL命令允许修改的标志：
+O_APPEND,O_NONBLOCK,O_NOATIME,O_ASYNC,O_DIRECT
+使用fcntl()修改文件状态标志，尤其适用如下场景
+1.文件不是有调用进程打开的，所以程序也无法使用open()调用来控制文件的状态标志
+2.文件描述符的获取是通过open()之外的系统调用，比如pipe(),socket()
+int flags;
+flags = fcntl(fd, F_GETFL);
+if(flags == -1)
+	errExit("fcntl");
+flags |= O_APPEND;
+if(fcntl(fd,F_SETFL,flags) == -1)
+	errExit("fcntl");
+
+文件描述符和打开文件之间的关系
+1.进程级的文件描述符表
+	控制文件描述符操作的一组标志，目前只有一个close-on-exec
+	对打开文件句柄的引用
+2.系统级的打开文件表
+	当前的文件偏移量
+	打开文件时使用的状态标志
+	文件访问模式
+	与信号驱动ＩＯ相关的设置
+	对文件i-node对象的引用
+3.文件系统的i-node表
+	文件类型和访问权限
+	一个指针，指向该文件所有只有的锁的列表
+	文件的各种属性，包括文件大小以及不同类型操作相关的时间戳
+此处忽略i-node在磁盘和内存中的变现差异．磁盘中的i-node记录了文件的固有属性，诸如：文件类型，访问权限和时间戳．访问文件时，会在内存中为i-node创建一个副本，其中记录了引用
+改i-node的打开文件句柄数量以及该i-node所有在设备的主，从设备号，还包括一些打开文件相关的临时属性，例如：文件锁
+
+复制文件描述符
+2>&1
+int dup(int oldfd);
+	return  (new) file descriptor on success,or -1 on error
+int dup2(int oldfd, int newfd);
+	return (new) file descriptor on success,or -1 on error
+如果newfw参数所指定编号的文件描述符之前已经打开，那么dup2()会首先将其关闭。dup2()调用会默认忽略newfd关闭时出现的任何错误。故此，编码时更为安全的做法是，在
+调用dup2()之前，若newfw已经存在，则应显式调用close()将其关闭
+fcntl()的F_DUPFD操作是复制文件描述符的另一个接口
+newfd = fcntl(oldfd, F_DUPFD, startfd)
+该调用为oldfd创建一个副本，且将使用大于等于startfd的最小未使用值作为文件描述符编号
+
+新文件描述符的正，副本之间共享同一打开文件句柄，然而新文件描述符有其自己的一套文件描述符标志,且其close-on-exec标志（FD_CLOEXEC）总是处于关闭状态。
+int dup3(int oldfd, int newfw, int flags)
+	return (new) file descripor on success, or -1 on error
+可以直接控制新文件描述符的close-on-exec 标志
+目前dup3()只支持一个标志O_CLOEXEC
+dup3()系统调开始见于linux2.6.27,为linux专有
+linux从2.6.24开始支持fcntl()用户复制文件描述符的附加命令，FD_DUPFD_CLOEXEC
+
+在文件特定偏移处IO
+ssize_t pread(int fd, void *buf, size_t count,off_t offset);
+	return number of bytes read, 0 on EOF, -1 on error
+ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
+	return number of bytes written, or -1 on error
+pread()调用等同于将如下调用纳入同一原子操作
+off_t orig;
+orig = lseek(fd, 0, SEEK_CUR);
+lseek(fd, offset, SEEK_SET);
+s = read(fd, buf, len);
+lseek(fd, orig, SEEK_SET);
+对于pread(),pwrite(),fd所指代的文件必须是可定位的，它们不会改变文件的当前偏移量
+
+分散输入和集中输出
+ssize_t readv(int fd, const struct iovec *iov, int iovcnt);
+	returns number of bytes read, 0 on EOF, or -1 on error
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
+	returns number of bytes written, or -1 on error
+这些系统调用一次即可传输多个缓存区数据
+struct iovec{
+	void *iov_base;
+	size_t iov_len;
+}
+调用者必须对返回值进行检查，以验证读取的字节数是否满足要求，若数据不足以填充缓冲区，则只会占用部分缓冲区，其中最后一个缓冲区可能只存有部分数据
+readv(),writev()调用的主要优势在于便捷。如下两个方案，都可以替代对writev()的调用
+1.编码时，首先分配一个大缓冲区，随即再从进程地址空间的其他位置将数据复制过来，最后调用write()输出其中的所有数据
+2.发起一系列write()调用，逐一输出每个缓冲区的数据
+尽管方案一在语义上等同于writev()调用，但需要在用户空间分配缓冲区，进行数据复制，很不方便，效率也低
+方案二在语义上就不同于单次的writev()调用，因为发起多次write()调用将无法保证原子性，更何况执行一次writev()调用比执行多次write()调用开销小
+
+在指定的文件偏移量处执行文件分散输入/集中输出
+ssize_t preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset);
+	returns number of bytes read, 0 on EOF, or -1 on error;
+ssize_t pwritev(int fd , const struct iovec *iov, int iovcnt  , off_t offset);
+	returns number of bytes written, or -1 on error
+	
+截断文件truncate(),ftruncate()系统调用
+int truncate(const char *pathname, off_t length);
+int ftruncate(int fd, off_t length);
+	Both return 0 on success, or -1 on error;
+若文件当前长度大于参数length,调用将丢弃超出部分，若小于参数length,调用将在文件尾部添加一系列空字节或者是一个文件空洞
+ftruncate()系统调用不会修改文件偏移量
+
+非阻塞IO
+在打开文件时指定O_NONBLOCK标志，目的有二
+1.若open()调用未能立即打开文件，则返回错误，而非陷入阻塞。有一种情况输入域例外，调用open()操作FIFO可能会陷入阻塞
+2.调用open()成功后，后续的io操作也是非阻塞的，如果IO系统调用未能立即完成，即可能会只传输部分数据，或者系统调用失败，并返回EAGAIN或EWOULDBLOCK
+管道，FILO，嵌套字，设备（比如终端，伪终端）都支持非阻塞模式
+由于内核缓冲区保证了普通文件IO不会陷入阻塞，故而打开普通文件时，一般会忽略O_NONBLOCK标志，然而当使用强制文件锁时，O_NONBLOCK标志对普通文件也是起作用的
+
+大文件IO
+始于内核版本2.4，32位linux系统开始提供对LFS的支持（glibc版本必须为2.2或者更高），另一个前提是，相应的文件系统也必须支持大文件操作
+微软的VFAT和NFSv2系统都不支持大文件
+
+过度型LFS API
+都是将相应的系统调用后加64,比如open64(), read64()...,在编译时定义_LARGEFILE64_SOURCE功能测试宏
+open64()就相当于，open()调用时指定O_LARGEFILE
+
+_FILE_OFFSET_BITS宏
+cc -D_FILE_OFFSET_BITS=64
+使用宏_FILE_OFFSET_BITS要比采用过渡型的LFS API更为简单，但也要求应用程序的代码必须规范（例如，声明放置文件偏移量的变量，应正确使用off_t,而不能使用"原生"的C语言整型）
+
+/dev/fd目录
+/dev/fd实际上是一个符号链接，链接到linux所特有的/proc/self/fd目录，后者有时linux特有的/proc/$PID/fd目录族的特例之一
+ls | diff - oldfilelist (diff, ed, tar , comm)
+ls | diff /dev/fd/0 oldfilelist
+
+创建临时文件
+
+#include <stdlib.h>
+int mkstemp(char *template);
+	return file descriptor on success , 0r -1 on error;
+int fd;
+char template[] = "/tmp/somestringXXXXXX";
+fd = mkstemp(template);
+if(fd == -1)
+	errExit("mkstemp");
+printf("generated filename was : %s\n", template);
+unlink(template);
+if(close(fd) == 1)
+	errExit("close");
+
+#include <stdio.h>
+FILE * tmpfile(void);
+	return file pointer on success, or null on error
+tmpfile()函数执行成功，将返回一个文件流供stdio库函数使用文件流关闭后，将自动删除临时文件。为达到这个目的，tmpfile()函数会在打开文件后，从内部立即调用unlink()来删除文件名
