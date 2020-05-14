@@ -1,0 +1,119 @@
+程序是包含了一系列信息的文件,这些信息描述了如何在运行时创建一个进程,所包括的内容:
+1.二进制格式标志:COFF,a.out,ELF
+2.机器语言指令
+3.程序入口地址
+4.数据
+5.符号表及重定位表
+6.共享库和动态链接信息
+7.其他信息
+进程是由内核定义的抽象的实体,并为该实体分配用以执行程序的各项系统资源
+从内核角度看,进程由用户内存空间和一系列内核数据接口组成
+  其中用户空间包含了程序代码及代码所使用的变量
+  内核数据结构则用户维护进程状态信息.进程相关的表示符(IDs),虚拟内存表,打开文件的描述符表,信号传递及处理的有关信息,进程资源使用及限制,当前工作目录和大量的其他信息
+进程号和父进程号
+pid_t getpid(void)
+	always successfully returns process ID of caller
+
+pid_t getppid(void)
+	always successfully returns process ID of parent of caller
+进程号数量上限可以通过/proc/sys/kernel/pid_max调整
+pstree 看"家族树"
+/proc/PID/status
+
+进程内存分布
+文本段
+初始化数据段
+未初始化的数据段
+栈
+堆
+环境变量和命令行参数
+
+extern char etext;
+extern char edata;
+extern char end;
+
+虚拟内存管理
+空间局限性，时间局限性
+任一时刻，每个程序仅有部分页需要驻留在物理内存页帧中。这些页构成了驻留集，程序未使用的页拷贝在交换区内--这是磁盘空间中的保留区域，作为计算机RAM的补充，仅在需要时才会载入物理内存
+若进程欲访问的页面目前未驻留在物理内存中，将会发生页面错误（page fault），内核即可挂起进程的执行，同时从磁盘中讲改页面载入内存
+sysconf(_SC_PAGESIZE)来获取系统虚拟内存的页面大小
+
+内核为每个进程维护了一张页表。该页表描述了每页在进程虚拟地址空间（virtual address space）中的位置。页表中的每个条目要么指出一个虚拟页面在RAM中的位置，要么表明
+其当前驻留在磁盘上
+在进程虚拟地址空间中，并非所有的地址范围都需要页表条目。通常情况下，由于可能存在大段的虚拟地址空间并未投入使用，故而也无必要为其维护相应的页表条目。若进程试图访问的
+地址并无页表条目与之对应，那么进程将会收到一个SIGSEGV信号
+
+由于内核可以为进程分配和释放页（和页表条目），所以进程的有效虚拟地址方位在其声明周期中可以放生变化
+1.由于栈向下增长超出了之前曾达到的位置
+2.挡在堆中分配和释放内存时，通过调用brk(),sbrk()或malloc()函数族来提升program break的位置
+3.当调用shmat()连接system V共享内存区域时。或者当调用shmdt()脱离共享内存区时
+4.当调用mmap()创建内存映射时，或者当调用mummap()解除内存映射时
+
+虚拟内存管理的好处
+1.进程与进程隔离，和内核隔离，互相之间不会影响，因为他们实际对应的物理内存位置集合不一样
+2.适当情况下面，两个或者多个进程能够共享内存
+   a.执行一个程序的多个进程
+   b.进程可以使用shmget()和mmap()系统调用显式的请求和其他进程共享内存
+3.便于实现内存保护机制，
+4.程序员，编译器，链接器不用关心程序中RAM物理布局
+5.因为需要驻留在内存中仅是程序的一部分，所以程序加载和运行很快，而且一个进程所占用的内存能超出RAM容量
+6.每个进程使用的RAM减少了，同一时间系统能容纳的进程数量就增多了，所以变相的提升了cpu利用效率
+
+栈和栈帧
+
+命令行参数（argc ,argv）
+argv[0]一个实用的小技巧，同一个程序，不同的链接文件链接这个程序，用软连接的方式来运行这个程序，程序执行一样，当时argv[0]是各自的软链接的名称
+gzip,gunzip, zcat 都是这个技术应用的一个例子
+/proc/$PID/cmdline
+
+在<errno.h>中_GNU_SOURCE, program_invocation_ name; , program_invocation_ short_name;
+
+环境列表
+SHELL=/bin/sh
+export SHELL
+
+export SHELL=/bin/bash
+
+setenv SHELL /bin/bash
+
+NAME=value program
+
+printenv
+/proc/$PID/environ
+
+extern char **environ;
+
+#include <stdlib.h>
+char *getenv(const char *name);
+	return pointer to (value) string , or NULL if no such value
+调用getenv()应该将返回的字符串复制的其他位置，这个函数是不可重入的
+
+int putenv(char *string)
+	return 0 on success, or nonzero on error;
+	string -> "name=value"的形式
+int setenv(const char *name, const char *value, int overwrite);
+	return 0 on success, or -1 on error;
+其在内存会创建一个缓存，将name和value放到其中
+
+int unsetenv(const char *name);
+	return 0 on success, or -1 on error
+
+#define _BSD_SOURCE
+int clearenv()
+
+执行非局部跳转：setjmp()和longjmp()
+#include <setjmp.h>
+int setjmp(jmp_buf env);
+	return 0 on initial call, nonzero on return via longjmp();
+void longjmp(jmp_buf env, int val);
+对setjmp()函数的使用限制
+1.构成选择或迭代语句中（if, switch, while等）的整个控制表达式
+2.作为一元操作符（！），其最终表达式构成1，（==,!=,< 等）的一部分，另一操作对象必须一个整数常量表达式，最终构成1
+3.走位独立函数调用，且没有嵌入到更大的表达式中
+
+s=setjmp(env),这用的使用是错误
+不能longjmp到一个已经放回的函数中去，这个行为是错误的
+如果从嵌套的信号处理函数（即信号某甲的处理器正在运行时，又发起对信号某乙处理器的调用）中调用longjmp().则该程序的行为未定义
+
+优化编译的问题
+setjmp()会回滚寄存器的值，但是不会回滚ram中的值，当优化变量时有些变量编程的寄存器变量，这样在有些场景下程序运行结果不是预期值了
