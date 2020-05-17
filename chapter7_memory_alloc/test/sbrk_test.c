@@ -2,8 +2,11 @@
 #include <unistd.h>
 #include <stdlib.h>
 extern char end;
+extern char etext;
+extern char edata;
 int main()
 {
+		printf("etext:%p, edata:%p\n", &etext, &edata);
 		printf("sizeof(int)=%ld, sizeof(int *)=%ld\n", sizeof(int),sizeof(int *));
 		printf("init:sbrk(0)=%p, end=%p\n", sbrk(0), &end);
 		void *p = sbrk(32);
