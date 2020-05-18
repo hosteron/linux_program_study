@@ -1,0 +1,13 @@
+/etc/passwd
+/etc/shadow
+/etc/group
+/etc/gshadow
+增加一个新的用户
+useradd -d /home/newuser newuser
+passwd newuser
+mkdir -p /home/newuser
+chown newuser:newuser /home/newuser
+
+gpasswd $GROUP 给组设置一个密码
+groups $USERNAME 表示用户所有的属组
+newgrp  $GROUPNAME

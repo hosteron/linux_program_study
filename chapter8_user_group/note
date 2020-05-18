@@ -1,0 +1,128 @@
+每个用户都拥有一个唯一的用户名和一个与之相关的数值型用户标识符，用户可以隶属于一个或多个组
+而每个组也都拥有唯一一个名称和一个组标识符
+用户和组ID的主要用途有二：
+1.确定各种系统资源的所有权
+2.对赋予进程访问上述资源的权限加以控制
+密码文件/etc/passwd
+没行包括7个字段，之间用冒号隔开
+1.登录名， ls -l 显示的是登录名
+2.经过加密的密码，长度为13个字符，如果密码字段中包含了其他字符串，特别是，当字符串长度超过13哥哥字符时，将禁止此用户登录，如果启用了shadow密码，系统将不解析该字段，这时，密码字段通常会包含字母“x”
+  经过加密的密码实际上存储在shadow文件中，若/etc/passwd中密码字段为空。则该账户登录时，无需密码（即便启用了shadow密码也是如此）
+3.用户ID
+4.组ID：用户属组中首选属组的数值型ID
+5.注释
+6.主目录
+7.登录shell
+
+组文件/etc/group
+groups命令会显示当前shell进程所属各组的信息，如果将一个或多个用户名作为其命令行参数，那么该命令将显示相应用户所属各组的信息
+
+useradd 命令可以用来添加新用户
+	newuser -d /home/newuser newuser
+一个用户所属的组由两个文件来确定/etc/passwd中的首选用户组ID字段和/etc/group文件确定
+/etc/group的文件构成
+gpasswd
+newgrp
+/etc/gshadow
+1.组名
+2.经过加密处理的密码，现在很少使用组密码了，不过特权用户可以使用gpasswd命令来设置组密码。如果用户并非某组的成员，那么使用newgrp启动新shell之前（新shell的属组包括该组），就需要用户提供此密码
+  如果启用了shadow,该字段将是x，但也允许其内容为包括空字符串在内的任何字符串，而进过加密的密码实际上存放在shadow组文件/etc/gshadow中，仅供具有特权用户和程序访问，它的加密方式类似于用户密码
+3.组ID
+4.用户列表：属于该组的用户名列表
+#include <pwd.h>
+struct passwd *getpwnam(const char *name);
+struct passwd *getpwuid(uid_t uid)
+	both return a  pointer on success , or NULL on error;
+	see main text for description of the "not found "case
+struct passwd {
+               char   *pw_name;       /* username */
+               char   *pw_passwd;     /* user password */
+               uid_t   pw_uid;        /* user ID */
+               gid_t   pw_gid;        /* group ID */
+               char   *pw_gecos;      /* user information */
+               char   *pw_dir;        /* home directory */
+               char   *pw_shell;      /* shell program */
+           };
+这些函数都是不可重入的函数
+有一组可重入的函数：
+getpwnam_r();
+getpwuid_r();
+getgrnam_r();
+getgrgid_r();
+其参数包括passwd(或group)结构，以及一个缓冲区，这一缓冲区专门用来保存passwd(group)结构中各字段所指向的其他结构，可以使用系统函数
+sysconf(_SC_GETPW_R_SIZE_MAX)或sysconf(_SC_GETGR_R_SIZE_MAX)来获取此缓冲区所需要的字节数
+
+struct passwd *pwd;
+errno = 0;
+pwd = getpwnam(name);
+if(pwd == NULL){
+	if(errno == 0)
+	// not found
+	else
+		// error
+}
+从组文件中获取记录
+#include <grp.h>
+struct group *getgrnam(const char *name);
+struct group *getgruid(git_t gid);
+	both return a pointer on success, or null on error;
+	see main text for description of not found case
+struct group {
+               char   *gr_name;       /* group name */
+               char   *gr_passwd;     /* group password */
+               gid_t   gr_gid;        /* group ID */
+               char  **gr_mem;        /* group members */
+           };
+遍历密码文件
+#include <pwd.h>
+struct passwd *getpwent();
+	return pointer on success, or NULL on end f stream or errror;
+void  setpwent(void);
+void endpwent(void);
+遍历组文件
+struct group *getgrent();
+void setgrent();
+void endgrent();
+从shadow密码文件中获取记录
+#include <shadow.h>
+struct spwd *getspnam(const char *name);
+	returns pointer on success,or NULL on not found or error
+struct spwd *getspent(void)
+	returns pointer on success, or NULL on end of stream of error
+void setspent();
+void endspent();
+ struct spwd {
+               char *sp_namp;     /* Login name */
+               char *sp_pwdp;     /* Encrypted password */
+               long  sp_lstchg;   /* Date of last change
+                                     (measured in days since
+                                     1970-01-01 00:00:00 +0000 (UTC)) */
+               long  sp_min;      /* Min # of days between changes */
+               long  sp_max;      /* Max # of days between changes */
+               long  sp_warn;     /* # of days before password expires
+                                     to warn user to change it */
+               long  sp_inact;    /* # of days after password expires
+                                     until account is disabled */
+               long  sp_expire;   /* Date when account expires
+                                     (measured in days since
+                                     1970-01-01 00:00:00 +0000 (UTC)) */
+               unsigned long sp_flag;  /* Reserved */
+           };
+
+密码的单向加密方法
+#define _XOPEN_SOURCE
+#include <unistd.h>
+char *crypt(const char *key, const char *salt);
+	returns pointer to statically allocated string containing encrypted pasword on success, or null  on error
+crypt()算法会接受一个长度最长可达8字符的秘钥，并施之以数据加密算法DES的一种变体。salt参数指向一个两字符的字符串，用来扰动DES算法，设计该技术意在使得
+进过加密的密码更加难以破解。该函数返回一个指针，指向长度为13个字符的字符串，该字符串为静态分配的，内容是经过加密处理的密码
+salt参数和经过加密的密码，其组成成员均取自同一字符集合，范围在[a-zA-Z0-9/.]之间，共计64个字符slat参数可使加密算法产生4096（64*64）种不同变化
+  由crypt()所返回的经过加密的密码中，头两个字符是对原始salt值的拷贝，也就是说，加密候选密码时，能够从已家吗密码中获取salt值
+  加密新密码时passwd这样的程序会随机生成一个salt值，在salt参数中只有前两个字符对crypt()函数有用，因此可以直接将已加密密码指定为salt值
+  想在linux中使用crypt()，在编译时需要 -lcrypt,以便程序链接crypt库
+
+#define _BSD_SOURCE
+#include <unistd.h>
+char *getpass(const char *prompt);
+	returns pointer to statically allocated input password string
+getpass()函数首先会屏蔽回显功能，并停止终端特殊字符的处理，然后，打印出prompt所指向的字符串，读取一行输入，返回以null结尾的字符串，返回结果之前，getpass()会将终端还原
