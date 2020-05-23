@@ -1,0 +1,137 @@
+进程凭证
+1.实际用户ID(real user ID)和实际组ID(real group ID)
+登录shell会从/etc/passwd文件中读取相应用户密码记录的第三字段和第四字段,置为其实际用户ID和实际组ID,当创建新进程时,将从其父进程中继承这些id
+
+2.有效用户ID(effective user ID)和有效组ID(effective group ID)
+当进程尝试执行各种操作(即系统调用)时,将结合有效用户ID,有效组ID,连同辅助组ID一起来确定授予进程的权限.
+例如,当进程访问文件,System V进程通信IPC对象之类的系统资源时,此类ID会决定系统授予进程的权限,而这些资源的属主则另由与之相关的用户ID和组ID来决定,内核还会使用有效用户ID来决定一个进程是否能向另一个进程发送信号
+有效用户ID为0(root 的用户ID)的进程拥有超级用户的所有权限.这样的进程又称为特权级进程.而某些系统调用只能由特权进程调用
+
+
+sudo chmod u+s  prog  // turn on set-user-ID permission bit
+sudo chmod g+s prog   // turn  on set-group-ID permission bit
+linux中常使用的set-user-ID程序包括：passwd,mount, umount,su
+set-group-ID程序的例子之一为wall,用来向tty组下的所有终端（通常情况下，所有终端都属于该组）写入一条消息
+
+3.保存的set-user-ID(saved set-user-ID)和保存的set-group-ID(saved set-group-ID)
+设计保存set-user-ID(saved set-user-ID)和保存set-group-ID(saved set-group-ID),意在与set-user-ID和set-group-ID程序结合使用
+当执行程序时，将会（依次）发生如下事件
+1.若可执行文件的set-user-ID（set-group-ID）权限位已开启，则将进程的有效用户（组）ID置为可执行文件的属主。若未设置set-user-ID(set-group-ID)权限位，则进程的有效用户（组）ID将保持不变
+2.保存set-user-ID和保存set-group-ID的值由对应的有效ID复制而来，无论正在执行的文件是否设置了set-user-ID或set-group-ID权限位，这一复制都会进行
+
+4.文件系统用户ID(file-system user ID) 和文件系统组ID(file-system group ID)
+在linux系统中，要进行打开文件，改变文件属主，修改文件权限之类的文件系统操作时，决定其操作权限的是文件系统用户ID和组ID（结合辅助组ID），而非有效用户ID和组ID
+
+文件系统用户ID和组ID的值等同于相应的有效用户ID和组ID，只要有效用户或组ID发生变化，无论是通过系统调用还是通过执行set-user-ID或者set-group-ID程序，则相应的文件系统ID也随之改变为同一值
+只有当使用linux特有的两个文件系统调用（setfsuid(), setfdgid()）时，才可以可以制造出文件系统ID和相应有效ID的不同，因而linux也不同于其他unix实现
+
+5.辅助组ID
+
+a.获取和修改进程凭证
+获取
+#include <unistd.h>
+uid_t getuid(void);
+	return real user ID of calling process
+uid_t geteuid(void);
+	return effective user ID of calling  process
+git_t getgid()
+	return real group ID of calling process
+git_t getegit()
+	return effective group ID of calling process
+修改
+#include <unistd.h>
+int setuid(uid_t uid);
+int setgid(uid_t gid);
+	Both return 0 on success, or -1 on error;
+进程使用setuid(), setgid()系统调用能对其凭证做哪些修改？其规则取决于进程是否拥有特权（有效用户ID为0）.适用setuid()系统调用的规则如下
+1.当非特权进程调用setuid()时，仅能修改进程的有效用户ID，而且仅能将有效用户ID修改程相应的实际用户I或保存set-user-ID。（企图违反这约束将引发EPERM错误）
+ 这意味着，对于非特权用户来说，仅当执行set-user-ID程序，setuid()才有用，如果不是这样，实际，有效，保存的ID都一样，没有实际意义
+2.当特权继承以一个非0参数调用setuid()时，其实际用户ID，有效用户ID和保存set-user-ID均被设置程uid参数所指定的值。这一操作是单向的，因为，一旦这样设置了，进程的所有特权都会丢失
+setgid()和setuid规则一样，，但是规则2中，对组ID的修改不会影响的进程的特权，特权进程可以调用setgid()对组ID进程任意修改
+
+对set-user-ID-root程序，以不可逆方式放弃进程所有特权的首选方法是使用如下系统调用
+if(setuid(getuid()) == -1)
+	errExit("setuid");
+
+b.进程能使用seteuid()来修改其有效用户ID，使用setegid()来修改其有效组ID
+#include <unistd.h>
+int seteuid(uid_t euid);
+int setegit(git_t egid);
+	Both return 0  on success, or -1 on error
+1.非特权进程seteuid()和setegid()仅能修改成进程实际ID和保存设置ID，就是和setuid()，setgid()等效
+2.特权进程可以将有效ID修改程任意值，如果特权进程用seteuid()将其有效用户ID改为非0值，那么此进程将不在具有特权
+euid = geteuid();
+if(seteuid(getuid()) == -1)
+	errExit("seteuid");
+if(seteuid(euid) == -1)
+	errEixt("seteuid");
+
+c.修改实际ID和有效ID
+ setreuid()系统调用允许调用进程独立修改其实际和有效用户ID。setregid()系统调用对实际和有效组ID实现了类似功能
+ #include <unistd.h>
+int setreuid(uid_t ruid, uid_t euid);
+int setregid(gid_t rgid, gid_t egid);
+	Both return 0 on success, or -1 on error
+这两个系统调用的第一个参数都是新的实际ID，第二个参数都是新的有效ID。若只想修改其中一个ID，可以将另一个参数指定为-1
+它要遵循一定的规则
+1.非特权进程只能将其实际用户ID设置为当前实际用户ID值（即保持不变）或有效用户ID，且只能将有效用户ID设置程当前实际用户ID，有效用户ID（即无变化）或保存设置ID
+2.特权进程能够设置其实际用户ID和有效用户ID为任意值
+3.不管进程是否拥有特权，只要如下条件之一成立，就能将保存set-user-ID设置成（新的）有效用户ID
+  a）ruid不为-1（即设置实际用户ID，即便设置为当前值）
+  b）对有效用户ID所设置的值不同于系统调用之前的实际用户ID
+特权级进程永久放弃特权的方法
+setreuid(getuid(), getuid());
+
+如果set-user-ID-root程序有意将用户凭证改变为任意值，则应该先调用setregid(),再调用setreuid(),不然，setregid()会调用失败，因为在这种场景下进程已没有特权
+
+6.获取实际，有效和保存设置ID
+#define _GNU_SOURCE
+#include <unistd.h>
+int getresuid(uid_t *ruid, uid_t *euid, uid_t *suid);
+int getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid);
+	Both return 0 on success, or  -1  on error
+7.修改实际，有效和保存设置ID
+#define _GNU_SOURCE
+#include <unistd.h>
+int setresuid(uid_t ruid, uid_t euid, uid_t suid);
+int setresgid(gid_t rgid, gid_t egid, gid_t sgid);
+	Both return 0 on success, or -1  on error;
+若不想同时修改这些ID，则需将无意修改的ID参数值指定为-1.例如，下列调用等同于seteuid() == > setresuid(-1, x, -1)
+规则：
+1.非特权进程能够将实际，有效，保存中的任一ID设置为实际用户ID， 有效用户ID或保存set-user-ID之中的任一当前值
+2.特权级进程能够对其实际用户ID，有效用户ID和保存set-user-ID做任意设置
+3.不管系统调用是否对其他ID做了任何改动，总是将文件系统用户ID设置为与有效用户ID（可能是新值）相同
+
+setresuid()和setresgid()调用具有0/1效应，即对ID的修改请求要么全都成功，要么全都失败
+
+8.获取和修改文件系统ID
+#include <sys/fsuid.h>
+int setfsuid(uid_t fsuid);
+	always returns the previous file-system user ID
+int setfsgid(gid_t fsgid);
+	always returns the previous file-system group ID
+非特权进程能够将文件系统用户ID设置成实际，有效，文件系统ID和保存set-user-ID的当前值
+特权进程能够将文件系统用户ID设置为任意值
+
+9.获取和修改辅助组ID
+#include <unistd.h>
+int getgroups(int gidsetsize, git_t grouplist[]);
+	returns number of group IDs placed in grouplist on success, or -1  on error;
+如果将gidsetsize 指定为0，那么这个调用将返回进程辅助组的个数，可以利用这一特性来做事情
+
+10.特权级进程可以使用setgroups()和initgroups()来修改其辅助组ID集合
+#define _BSD_SOURCE
+#include <grp.h>
+int setgroups(size_t gidsetsize, const gid_t *grouplist);
+int initgroups(const char *user, gid_t group);
+	Both return 0 on success, or -1 on error;
+setgroups 会将grouplist数组所指定的集合来替换调用进程的辅助组ID
+initgroups()函数会扫描/etc/groups 文件，为user创建属组列表，以此来初始化调用进程的辅助组ID，另外会将group参数指定的组ID追加到进程的辅助组ID中
+intigroups（）函数主要用户是login程序，在用户调用登录shell之前，为进程设置各种属性
+
+
+
+
+
+
+
