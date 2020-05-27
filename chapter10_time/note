@@ -1,0 +1,152 @@
+程序可能会关注两种时间类型
+真实时间
+  度量这一时间的起点有二： 1.某个标准时间。2.进程的生命周期内的某个固定时间点（通常为程序启动）
+进程时间
+	一个进程所使用的CPU时间总量，适用于对程序，算法性能的检查或优化
+系统调用gettimeofday(),可于tv指向的缓冲区中返回日历时间
+#include <sys/time.h>
+int gettimeofday(struct timeval *tv, struct timezone *tz); //struct timezone *tz已被废弃
+	return 0 on success, or -1 on error;
+struct timeval {
+               time_t      tv_sec;     /* seconds */
+               suseconds_t tv_usec;    /* microseconds */
+           };
+struct timezone {
+               int tz_minuteswest;     /* minutes west of Greenwich */
+               int tz_dsttime;         /* type of DST correction */
+           }
+系统调用time()
+#include <time.h>
+time_t time(time_t *timep);
+	returns number of seconds since the Epoch, or (time_t)-1 on error;
+t = time(NULL);
+
+将time_t转换成可打印格式，ctime()函数提供的了一个简单方法
+#include <time.h>
+char *ctime(const time_t *timep);
+	return pointer to statically allocated string terminated by newline and \0 on success, or NULL on error
+
+ctime(), gmtime(), localtime(),asctime()中的任一函数，都可能会覆盖由其他函数返回，且经静态分配的数据结构，这些函数可以共享返回的字符数组或者tm结构体
+#include <time.h>
+struct tm *gmtime(const time_t *timep);
+struct tm *localtime(const time_t *timep);
+	Both return a pointer to a statically allocated broken-down time structure on success, or NULL on error;
+函数gmtime()能够把日历时间转换成一个对应于UTC的分解时间。相形之下，函数localtime()需要考虑时区和夏令时设置，返回对应于系统本地时间的一个分解时间
+ struct tm {
+               int tm_sec;         /* seconds */
+               int tm_min;         /* minutes */
+               int tm_hour;        /* hours */
+               int tm_mday;        /* day of the month */
+               int tm_mon;         /* month */
+               int tm_year;        /* year */
+               int tm_wday;        /* day of the week */
+               int tm_yday;        /* day in the year */
+               int tm_isdst;       /* daylight saving time */   > 0:DST is in effect , = 0: DST is not effect, < 0: DST information not avalilable
+           };
+#include <time.h>
+time_t mktime(struct tm * timeptr);
+	returns seconds since the Epoch corresoinding to timeptr on success, or (time_t) -1  on error
+其将本地时区的分解时间翻译程time_t值，这一转换会忽略tm结构中的tm_wday和tm_yday字段
+函数mktime()可能会修改timeptr所指向的结构体，至少会确保对tm_wday和tm_yday字段值的设置，会与其他输入字段的值能对应起来
+　　此外，mktime()不要求tm结构体中的其他字段受前面的范围约束，会自动调制到有效范围内，所有这些调整，均发生在mktime()更新tm_wday和tm_yday字段并返回time_t 之前
+　　　同时，其他字段是负值也是有效的
+mktime()在进行转换时会对时区进行设置（tm_isdst），此外，ＤＳＴ设置的使用与否取决于输入字段tm_isdst的值
+	1.若tm_isdst为0，则将这一时间视为标准时间
+	2.如果tm_isdst大于0，则将这一时间视为夏令时
+	3.若tm_isdst小于0，则试图判定DTS在每年的这一时间是否生效
+
+#include <time.h>
+size_t strftime(char *outstr,size_t maxsize, const char *format, const struct tm*timeptr);
+	returns number of bytes placed in outstr(excluding terminating null byte) on success, or 0 on error
+
+#define _XOPEN_SOURCE
+#include <time.h>
+char *strptime(const char *str, const char *format, struct tm *timeptr)
+	returns pointer to next unprocessed character in str on success, or NULL on error
+
+strptime()是strftime的逆向函数
+strptime()从不设置结构体的tm_isdst字段
+
+对于mktime()来说,传入的参数struct tm
+若tm_isdst为0,则将这一时间视为标准时间,忽略夏令时
+若tm_isdst为1,则将这一时间视为夏令时
+若tm_isdst小于0,则视图判定DTS在每年的这一时间是否生效,由函数自己判断
+(无论tm_isdst的初始值如何设置)在转换完成时,如果针对给定的时间,DST生效,mktime()会将tm_isdst字段设置成正值,若DST未生效则将tm_isdst设置成0
+我实际测试的结果是,只有这个地区采用了夏令时,tm_isdst字段设置成0/1才有用,比如我测试的中国上海的; 传出参数tm_isdst为0
+													比如美国纽约的,有夏令时的,0/1是生效的,不过传出参数tm_isdst都为1
+系统的本地时间由时区文件/etc/localtime定义,通常链接到/usr/share/zoneinfo下的一个文件
+时区文件的格式记录于tzfile,其创建可通过zic(zoone information compiler)工具来完成
+zdump命令可根据指定时区文件中的时区来显示当前时间
+zdump
+zdump
+为程序指定时区:
+	TZ环境变量 =":时区名称",其中时区名称定义于/usr/share/zoneinfo中
+设置时区会自动影响到函数:
+	ctime(),localtime(),mktime(),strftime();
+	为获取当前的时区设置,上述函数会调用tzset(),对如下3个全局变量进行初始化:
+		char *tzname[2]; 	// Name of timezone and alternate (DST) timezone
+		int daylight; 		//Nonzero if thereis an alternate (DST) timezone
+		long timezone		//seconds difference between UTC and local standard time
+	1.函数tzset()会首先检查环境变量TZ.如果尚未设置该变量,那么采用/etc/localtime中定义的默认时区来初始化时区
+	2.如果TZ的值为空,或无法与时区文件名匹配,那么就使用UTC
+	
+	还可将TZDIR环境变量(非标准的GNU扩展)设置为搜索时区信息的目录名称,以替代默认的/usr/share/zoneinfo目录
+
+地区信息
+	维护在/usr/share/local(在一些发行版本中为/usr/lib/local)
+函数setlocale()既可以设置也可查询程序的当前地区
+#include <locale.h>
+char *setlocale(int category, const char *locale);
+	returns pointer to a(usually allocated)string identifying the new or current locale on success, or NULL on error;
+	category:
+			LC_CTYPE
+			LC_COLLATE
+			LC_MONETARY
+			LC_NUMERIC
+			LC_TIME
+			LC_MESSAGES
+			LC_ALL->指定我们要设置的地区的所有部分的值
+	使用setlocale()设置地区有两种不同的方法.locale参数可能是一个字符串,指定系统上已定义的一个地区,如de_DE或en_US
+	另外地区可能被指定为空字符串,这意味着从环境变量中获取地区的设置 -> setlocale(LC_ALL,"");
+		只有这样,才能使程序使用环境变量中的地区,如果调用被省略,这些环境变量则不会对程序产生影响,环境变量和上述LC_*名称一样
+		另外还可以使用LC_ALL或LANG环境变指定整个地区的设置
+	
+	setlocale返回一个指针指向标识这一类地区设置的字符串.如果我们仅需要查看地区的设置而不需要改变他,那么我们可以指定locale参数为NULL
+	
+	命令locale -a 则将列出系统上定义的整套地区
+
+
+更新时间:
+	一般很少被应用程序使用
+	系统时间通常是由工具软件维护,如网络时间协议(Network Time Protocol) NTP,这些接口需要调用者已被授权CAP_SYS_TIME
+	系统调用settimeofday()是gettimeofday()的逆向操作,它将tv指向timeval结构体中的描述和微妙,设置到系统日历时间
+#define _BSD_SOURCE
+#include <sys/time.h>
+int settimeofday(const struct timeval *tv, const struct timezone *tz)
+	return 0 on success, or -1 on error
+
+还有一个系统调用stime() -> int stime(const time_t *t);
+
+settimeofday()改变时间是突然的,可以使用adjtime()调用,逐步调整时间到正确值
+
+#define _BSD_SOURCE
+#include <sys/time.h>
+int adjtime(struct timeval *delta, struct timeval *oldelta)
+	delta参数指向一个timeval结构体,指定需要改变时间的秒和微妙数.如果这个值是正数,那么每秒系统时间会额外快一点点,直到增加完所需时间,相反,以类似的方式减缓
+
+软件时钟(jiffies),它影响上述各种系统调用的精度
+	它的大小定义在内核代码常量HZ
+	有10,4,1毫秒的,对应HZ == 100, 250, 1000
+	
+进程时间
+	用户CPU时间
+	内核CPU时间
+使用time命令
+
+系统调用times
+#include <sys/times.h>
+clock_t times(struct tms *buf);
+	returns number of clock ticks since "arbitray" time in past on success, or -1 on error   = > 对应于时间度量单位 sysconf(_SC_CLK_TCK)
+clock_t clock()																			==> 对应于时间度量单位 CLOCKS_PER_SEC
+	returns total CPU time used by calling process  measured in CLOCKS_PER_SEC, or (clock_t) -1 on error
+
