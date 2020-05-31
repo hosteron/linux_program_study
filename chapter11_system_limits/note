@@ -1,0 +1,49 @@
+运行时恒定值
+路径名变量值
+运行时可增加值
+lim = sysconf(_SC_MQ_PRIO_MAX)
+lim = pathconf(directory_path, _PC_NAME_MAX)
+
+从shell中获取限制和选项：getconf
+getconf variable-name [pathname]
+variable-name 标识用户意欲获取的限制，应是符合SUSV3标准的限制名称，例如ARG_MAX或NAME_MAX.但凡限制和路劲名相关，则需要指定一个路劲名，作为命令的第二个参数
+	$getconf ARG_MAX
+	$getconf NAME_MAX /boot
+
+#include <unistd.h>
+long sysconf(int name);
+	return value of limit specified by name, or  -1 if limit is indeterminate or an error occurred
+	参数name为<unistd.h>文件中_sc_系列常量之一
+	若无法确定某一限制，则sysconf()返回-1，若调用sysconf()函数时发生错误，也会返回-1（唯一指定的错误是EINVAL,表示name无效），为区别上述两种情况，必须在调用函数前将errno的值设置程0，如果调用返回-1.且调用后errno值不为0，那么调用sysconf()函数发生错误
+	
+#include <unistd.h>
+long pathconf(const char *pathname, int name);
+long fpathconf(int fd, int name);
+	Both return value of limit specified by name, or -1 if limit is indeterminate or an error occurred
+	参数name是定义于<unistd.h>文件中的_PC_*常量之一.限制的值作为函数返回的结果。如要区分限制值不确定与发生错误，应对方式和sysconf()相同
+	有别于sysconf()函数，SUSv3并不要求pathconf()和fpathconf()的返回值在进程的生命周期内保持恒定。这是因为，例如，在进程运行期间，可能会卸载一个文件系统，然后再以
+	不同特性重新装载该文件系统
+
+GNU autoconf之类的扩展工具，该工具能够确定各种系统特性及限制是否存在，如何设置。autoconf程序可基于其收集到的信息而生成头文件，并能在C程序中将其包含在内
+
+系统选项
+	通过在<unistd.h>文件中定义相应的常量，实现能够在编译时告知其特定的SUSv3选项的支持。此类常量的命令均会冠以前缀（比如_POSIX_或者_XOPEN_）,以标识其源于何种标准
+	值为-1，表示实现不支持该选项
+	值为0，表示实现可能支持该选项。应用程序必须在运行时检查该选项是否获得支持
+	值大于0.通常为200112L,标识实现支持该选项
+	具体测试例子是在test/optionlimit.c文件中
+	在我的电脑中运行的结果是：
+		_POSIX_ASYNCHRONOUS_IO=200809, sysconf=200809
+		_POSIX_CHOWN_RESTRICTED=0, pathconf=-1
+		_POSIX_JOB_CONTROL=1, sysconf=1
+		_POSIX_MESSAGE_PASSING=200809, sysconf=200809
+		_POSIX_PRIORITY_SCHEDULING=200809, sysconf=200809
+		_POSIX_REALTIME_SIGNALS=200809, sysconf=200809
+		_POSIX_SAVED_IDS=1
+		_POSIX_SEMAPHORES=200809, sysconf=200809
+		_POSIX_SHARED_MEMORY_OBJECTS=200809, sysconf=200809
+		_POSIX_THREADS=200809, sysconf=200809
+		_XOPEN_UNIX=1, sysconf=1
+
+
+
