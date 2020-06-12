@@ -1,0 +1,93 @@
+设置一个stdio流的缓冲模式
+#include <stdio.h>
+int setvbuf(FILE *stream, char *buf, int mode, size_t size);
+	returns 0 on success, or nonzero on error;
+参数stream标识将要修改哪个文件流的缓冲，打开流后，必须在调用任何其他stdio函数之前先调用setvbuf()。setvbuf（）调用将影响后续在指定的流上进行的所有stdio操作
+1.如果参数buf不为NULL，那么其指向的size大小的内存块作为stream的缓冲区
+2.若buf为NULL，那么stdio库会为stream自动分配一个缓冲区（除非选择非缓冲的IO）
+参数mode指定了缓冲类型：
+	_IONBF
+		不对IO进行缓冲，每个stdio库函数将立即调用write()或read(),并且忽略buf和size参数，可以分别指定两个参数NULL和0，stderr默认属于这一类型，从而保证错误能立即输出
+	_IOLBF
+		采用行缓冲IO，指代终端设备的流默认属于这一类型。对于输出流，在输出一个换行符（除非缓冲区已经填满）前将缓冲数据。对于输入流，每次读取一行数据
+	_IOFBF
+		采用全缓冲IO，单次读，写数据（通过read（）或write（）调用）的大小与缓冲区相同。指代磁盘的流默认采用此模式
+#include <stdio.h>
+void setbuf(FILE*stream, char *buf);
+其相当于：
+	setvbuf(fp,buf,(buf!=NULL)?_IOFBF:_IONBF,BUFSIZE);
+BUFSIZE 定义在stdio.h头文件中，glibc通常把它定义程8196
+#define _BSD_SOUREC
+#include <stdio.h>
+void setbuffer(FILE *stream, char *buf , size_t size);
+相当于：
+	setvbuf(fp, buf, (buf!=NULL)?_IOFBF:_IONBF,size);
+
+刷星stdio缓冲区
+#include <stdio.h>
+int fflush(FILE * stream);
+	return 0 on success, EOF on error;
+若参数stream 为NULL，则fflush()将刷新所有的stdio缓冲区
+也能将fflush（）函数应用于输入流，这将丢弃已缓冲的输入数据(当程序下一次尝试从流中读取数据时，将重新装满缓冲区)
+在关闭相应流时，将自动刷新其stdio缓冲区
+
+控制文件IO的内核缓冲
+	1.同步IO数据完整性(synchronized IO data integrity completion)
+		就读操作而言，这意味着被请求的文件数据已经从磁盘传递给进程。若存在任何影响到所请求数据的挂起写操作，那么在执行读操作之前，会将这些数据传递到磁盘
+		就写操作而言，这意味着写请求所指定的数据已传递到磁盘完毕，且用于获取数据的所有文件元数据也已传递到磁盘完毕，注意这里的元数据并非需要传递所有经过修改的文件元数据
+		，发生修改的文件元数据中需要传递的属性之一是文件大小（如果写操作确实扩展了文件）。相行之下，如果文件时间戳发生了变化，就不需要在下次获取数据前将其传递到磁盘中
+	2.同步IO文件完整性（synchronized IO file integrity completion）
+		它需要将所有发生更新的文件元数据都传递到磁盘上
+
+用户控制文件IO内核缓冲的系统调用
+#include <unistd.h>
+int fsync(int fd);
+	return 0 on success, or -1 on error; 相当于—->synchronized IO file integrity completion
+
+#include <unistd.h>
+int fdatasync(int fd)
+	return 0 on success, or -1 on error;相当于—synchronized IO data integrity completion
+
+sync()系统调用会使包含更新文件信息的所有内核缓冲区（即数据块，指针块，元数据等）都刷新到磁盘上
+#include <unistd.h>
+void sync(void);
+
+若内容发生变化的内核缓冲区在30s内未显示的同步到磁盘上，则一条长期运行的内核线程会确保将其刷新到磁盘上，这个线程一般叫pdflush(在linux2.4中叫kupdated内核线程)
+文件/proc/sys/vm/dirty_expire_centisecs规定了在pdflsuh刷新之前脏缓冲区必须达到的“年龄”（以1%秒为单位），位于同一目录下其他文件控制pdflush操作的其他方面
+
+open()的带的参数
+O_SYNC -> 同步IO文件完整性
+O_DSYNC->同步IO数据完整性
+O_RSYNC标志是与O_SYNC或O_DSYNC标志一起使用，将这些标志对写操作的作用结合到读操作中
+
+就IO模式向内核提出建议
+#define _XOPEN_SOURCE 600
+#include <fcntl.h>
+itn posix_fadvise(int fd , off_t offset, off_t len, int advice);
+	returns o on success, or a positive error number on error;
+参数fd所指定为一个文件描述符，offset ,len 确定了建议所适用的文件区域。len为0表示从offset 开始到文件结尾（在内核2.6.2版本之前,len为0就是表示长度为0字节）
+advice:
+	POSIX_FADV_NORMAL
+		默认行为，在linux中，该操作将文件预读窗口设置为默认值：128KB
+	POSIX_FADV_SEQUENTIAL
+		进程预计会从低偏移到高偏移处读取数据。在linux中将文件预读窗口设置为默认值的两倍
+	POSIX_FADV_RANDOWM
+		进程预计随机访问文件，在linux中，该选项会禁用文件预读
+	POSIX_FADV_WILLNEED
+		进程预计在不久的将来访问指定的文件区域
+	POSIX_FADV_DONTNEED
+		进程预计在不久的将来将不会访问指定的文件区域
+	POSIX_FADV_NOREUSE
+		进程预计会一次性的访问文件的指定区域，目前在linux中没有作用
+
+绕过缓冲区高速缓存：直接IO
+	O_DIRECT
+		需要文件系统的支持，许多非UNIX文件系统（必须要VFAT）则不支持，如果文件系统不支持O_DIRECT标志，则open()将失败错误号EINVAL
+		尽量避免一个进程以O_DIRECT而另一个进程没有用这个标志打开这中场景，因为他们的数据不一致了
+混合使用库函数和系统调用进行文件IO
+#include <stdio.h>
+int fileno(FILE*stream);
+	returns file descriptor on success, or -1 on error;
+FILE *fdopen(int fd, const char *mode)
+	returns  (new) file pointer on success, or NULL on error; -> mode 的含义必须和open打开fd时用的mode一致，不然会失败
+
