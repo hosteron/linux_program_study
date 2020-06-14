@@ -1,0 +1,318 @@
+设备专用文件（设备文件）
+其与系统的某个设备相对应，某些设备是真实存在的，比如鼠标，磁盘和磁带设备；而另一些设备是虚拟的，即不存在相应的硬件，但内核会提供一种抽象设备，其携带的API与真实设备一般无异
+可将设备划分为以下两种类型：
+字符设备，基于每个字符来处理数据。终端和键盘属于字符设备
+块设备，每次处理一块数据，磁盘和磁带都属于块设备
+设备文件通常在/dev下面，超级用户可以用mknod命令创建设备文件，或这行mknod()系统调用
+
+设备ID：主、辅ID
+主ID标识一般的设备等级，内核会使用主ID号查找与该设备相对应的驱动程序，辅ID号能够在一般等级中唯一标识特定的设备。命令ls -l可以显示处出设备文件的主、辅ID
+设备文件的i节点会记录设备文件的ID，内核不会根据设备文件名来查找驱动程序，驱动会将自己和特定主设备号的关联关系向内核注册，内核会根据这去查找驱动程序
+
+磁盘驱动器：
+盘面，磁头，称为磁道的一组同心圆，磁道自身又划分为若干扇区，扇区包含一系列的物理块。
+物理块一般为512字节（或其倍数），代表了驱动器可读写的最小信息单元
+
+磁盘分区
+可将磁盘划分为一个或多个（不重叠）分区。内核则将每个分区视为位于/dev路径下的单独设备
+fdisk -l 列出磁盘上的所有分区
+linux中专有文件/proc/partitions 记录了系统中每个磁盘分区的主辅设备编号，大小和名称
+cat /proc/partitions 
+major minor  #blocks  name
+
+   8        0  488386584 sda
+   8        1     524288 sda1
+   8        2  483755008 sda2
+   8        3    4105216 sda3
+  11        0    1048575 sr0
+磁盘分区可容纳任何类型的信息，但通常只会包含一下之一
+1.文件系统
+2.数据区域，可作为裸设备对其进行访问
+3.交换区域，供内核的内存管理之用
+可通过mkswap命令来创建交换区。特权级进程可利用swapon()系统调用向内核报告磁盘分区用作交换区区域。swapoff()系统滴啊用则执行反向功能-告之内核，停止将磁盘分区用作交换区域
+#include <unistd.h>
+#include <asm/page.h> /* to find PAGE_SIZE */
+#include <sys/swap.h>
+
+int swapon(const char *path, int swapflags);
+int swapoff(const char *path);
+
+
+linux中专有文件/proc/swaps可以查看系统中当前已经激活的交换区的信息
+cat /proc/swaps 
+Filename				Type		Size	Used	Priority
+/dev/sda3                               partition	4105212	0	-1
+
+文件系统
+创建文件系统的命令：mkfs
+linux的专有文件/proc/filesystems中可以查看当前内核所知的文件系统的类型
+cat /proc/filesystems 
+nodev	sysfs
+nodev	rootfs
+nodev	ramfs
+nodev	bdev
+nodev	proc
+nodev	cgroup
+nodev	cpuset
+nodev	tmpfs
+nodev	devtmpfs
+nodev	debugfs
+nodev	securityfs
+nodev	sockfs
+nodev	pipefs
+nodev	anon_inodefs
+nodev	devpts
+	ext3
+	ext2
+	ext4
+nodev	hugetlbfs
+	vfat
+nodev	ecryptfs
+	fuseblk
+nodev	fuse
+nodev	fusectl
+nodev	pstore
+nodev	efivarfs
+nodev	mqueue
+
+文件系统结构
+其用来分配空间的基本单位是逻辑块，即文件系统所在磁盘设备上若干连续的物理块
+磁盘分区和文件系统的关系
+|分区                        |             分区                         |                 分区             |
+------------------------------------------------------------------------------------------------------------
+							/                                          \
+                           /                                            \
+---------------------------                                              ------------------------------------
+引导块                | 超级块                   |i节点表                         | 数据块                        |
+引导块：
+	总是作为文件系统的首块。引导块不为文件系统所用，只是包含用来引导操作系统的信息。操作系统虽然只需要一个引导块，但是所有的文件系统都设有引导块，其中的绝大部分并没有使用
+超级块：
+	紧随引导块之后的一个独立块，包含与文件系统有关的参数信息，其中包括：
+		i节点表容量
+		文件系统中逻辑块的大小
+		以逻辑块计，文件系统的大小
+	驻留于同一物理设备上的不同文件系统，其类型，大小以及参数设置（比如，块大小）都可以有所不同，这也是将磁盘划分为多个分区的原因之一
+i节点表：
+	文件系统中的每个文件或目录在i节点表中都对应唯一一条记录。这条记录等级了关乎文件的各种信息
+数据块：
+	文件系统的大部分空间都用户存放数据，以构成驻留于文件系统上的文件和目录
+
+i节点
+针对驻留于文件系统上的每个文件，文件系统的i节点表会包含一个i节点（索引节点的简称）。对i节点的标识，采用的是i节点表中的顺序位置，以数字表示。文件的i节点号（或
+简称为i号）是ls -li命令所显示的第一列。i节点所维护的信息如下所示
+	1.文件类型（比如，常规文件，目录，符号链接，以及字符设备）
+	2.文件属主
+	3.文件属组
+	4.3类用户的访问权限
+	5.3个时间戳：a.对文件的最后访问时间（ls -lu），b.对文件的最后修改时间（ls -l），c.文件状态的最后改变时间（ls -lc），linux系统不会记录文件的创建时间
+	6.指向文件的硬链接数
+	7.文件的大小，以字节为单位
+	8.实际分配给文件的块数量，以512字节块为单位。这一数字可能不会简单等同于文件的字节大小，因为考虑到文件空洞的情形，分配给文件的块数可能低于根据文件正常大小所计算出的块数
+	9.指向文件数据块的指针
+虚拟文件系统VFS
+	vfs针对文件系统定义了一套通用接口，所有与文件交互的程序都会按照这一接口来进行操作
+	每种文件系统都会提供VFS接口的实现
+日志文件系统
+Reiserfs,ext3,JFS,XFS,ext4,Btrfs
+
+单根目录层级和挂载点
+	内核支持针对每个进程的挂载命名空间。这意味着每个进程都可能拥有属于自己的一组文件系统挂载点，因此进程视角下的单根目录层级彼此会有所不同
+
+文件系统的挂载和卸载
+1.通过linux专有虚拟文件/proc/mounts,可查看当前已挂载文件系统的列表。/proc/mounts是内核数据结构的接口，因此总是包含已挂载文件系统的精确信息
+	随着引入了前述的每进程挂载命名空间特性，如今，每个进程都拥有一个/proc/PID/mounts文件其中列出组成进程挂载空间的挂载点，/proc/mounts只是指向/proc/self/mounts的符号链接
+2.mount和umount命令会自动维护/etc/mtab文件，该文件所包含的信息与/proc/mounts的内容相似，只是略微详细一些，特别是，etc/mtab包含了传递给mount的文件系统专有选项
+	，并未在/proc/mounts中出现。但是，因为系统调用mount和umount并不更新/etc/mtab，如果某些挂载或卸载了设备的应用程序没有更新该文件，那么/etc/mtab可能会变得不准确
+3./etc/fstab（由系统管理员手工维护）包含了对系统支持的所有文件系统的描述，该文件可供mount,umount以及fsck（）所用
+
+/dev/sda2 / ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
+1.已挂载设备名
+2.设备的挂载点
+3.文件系统类型
+4.挂载标志
+5.一个数字，dump会使用其来控制对文件系统的备份操作。只有/etc/fstab文件才会用到该字段和第6个字段，在/proc/mounts和/etc/mtab中，该字段总是0
+6.一个数字，在系统引导时，用于控制fsck（）对文件系统的检查顺序。
+挂载文件系统：
+mount()系统调用将由source指定设备所包含的文件系统，挂载到由target指定的目录下
+#include <sys/mount.h>
+int mount(const char *source, const char *target, const char *fstype, unsigned long mountflags, const void *data);
+	return 0 on success, or -1 on error;
+参数fstype是一字符串，用来标识设备所含文件系统的类型，比如ext4或btrfs.
+参数mountflags为一位掩码
+MS_BIND 建立绑定挂载
+MS_DIRSYNC 同步更新路径
+MS_MANDLOCK 允许强制锁定文件
+MS_MOVE 以原子操作将挂载点移至新位置  与mount --move选项想对应
+MS_NOATIME	不更新文件的最后访问时间
+MS_NODEV 不允许访问设备
+MS_NODIRATIME	不更新目录的最后访问时间
+MS_NOEXEC 不允许程序执行
+MS_NOSUID	禁用set-user-ID和set-group-ID程序
+MS_RDONLY 以只读方式挂载，不能修改或创建文件
+MS_REC	递归挂载
+MS_RELATIME	只有当最后访问时间早于或等于最后修改时间或最后状态变更时间时，才对前者进行更新
+MS_REMOUNT 使用新的mountflags和data重新挂载
+MS_STRICTATIME	总是更新最后访问时间
+MS_SYNCHRONOUS	使得所有文件和目录同步更新
+mount()的最后一个参数data是一个指向信息缓冲区的指针，对其信息的解释则取决于文件系统。就大多数文件系统而言，该参数是一个字符串，包含以逗号分隔开的选项设置
+
+卸载文件系统：
+#include <sys/mount.h>
+int umount(const char *target);
+	return 0 on success, or -1 on error;
+无法卸载正在使用中的(busy)文件系统，意即这以文件系统上有文件被打开，或者进程的当前工作目录驻留在此文件系统下。针对使用中的文件系统调用umount(),系统会返回EBUSY错误
+#include <sys/mount.h>
+int umount2(const char *target, int flags);
+	return 0 on success, or -1 on error;
+MNT_DETACH
+MNT_EXPIRE
+MNT_FORCE	即便文件系统（只对NFS文件系统有效）处于在用状态，依然将其强行卸载。采用这一选项可能会造成数据丢失
+UMOUNT_NOFOLLOW
+
+高级挂载特性
+在多个挂载点挂载文件系统：
+	每个挂载点下的目录子树内容都相同，在一个挂载点下对目录树所做的改变，同样可见与其他挂载点
+多次挂载同一挂载点
+	在内核版本2.4之前，一个挂载点只能使用一次。从内核2.4开始，linux允许针对同一挂载点执行多次挂载。每次新挂载都会隐藏之前可见于挂载点下的目录子数。卸载最后一次挂载点，挂载点下
+	上次挂载的内容会再次显示
+	结合MNT_DETACH标志下的umount操作，则无需将文件系统置成单用户模式，即可为其提供平滑迁移
+基于每次挂载的挂载标志
+	每次挂载有各自的标志
+绑定挂载
+	是指在文件系统目录层级的另一处挂载目录或文件。这将导致文件或目录在两处同时可见。绑定挂载有些类似于硬链接，单存在两个方面的差异
+	1.绑定关在可以跨越多个文件系统挂载点，甚至不拘于chroot监禁区(jail)
+	2，可针对目录执行绑定挂载
+	绑定挂载的应用场景之一是创建chroot监禁区（jail）。在监禁区下，无需将各种标准目录（诸如/lib）复制过来，为这些路径创建绑定挂载（可能是以只读方式）即可轻松解决问题
+递归绑定挂载
+	假设源目录下还存在子挂载（submount）,如果MS_BIND和MS_REC相或传入mount()，则会将子挂载复制到挂载目录下面，此之为递归绑定挂载
+	mount 命令提供的--rbind选项，可在shell中完成相同任务
+
+虚拟内存文件系统：tmpfs
+要创建tmpfs文件系统，请使用如下形式的命令：
+#mount -t tmpfs source target
+其中“source”可以是任意名称，其唯一的意义是在/proc/mounts中“抛头露面”，并通过mount 和df命令显示出来，与往常一样，target是该文件系统的挂载点。请注意，无需使用mkfs
+预先创建一个文件系统，内核会将此视为mount()系统调用的一部分自动加以执行
+	作为使用tmpfs的例子之一，可采用堆叠挂载（无需顾忌/tmp/目录目前是否处于在用状态），创建一tmpfs文件系统并讲其挂载至/tmp
+	还有一下两种用法：
+	1.由内核内部挂载的隐形tmpfs文件系统，用于实现system V 共享内存和共享匿名内存映射
+	2.挂载与/dev/shm的tmpfs文件系统，为glibc用以实现posix共享内存和POSIX信号量
+获得和文件系统有关的信息:
+statvfs()
+#include <sys/statvfs.h>
+int statvfs(const char *pathname, struct statvfs *statvfsbuf);
+int fstatvfs(int fd, struct statvfs *statvfsbuf);
+	Both return 0 on success, or -1 on error;
+		struct statvfs {
+               unsigned long  f_bsize;    /* filesystem block size */
+               unsigned long  f_frsize;   /* fragment size */
+               fsblkcnt_t     f_blocks;   /* size of fs in f_frsize units */
+               fsblkcnt_t     f_bfree;    /* # free blocks */
+               fsblkcnt_t     f_bavail;   /* # free blocks for unprivileged users */
+               fsfilcnt_t     f_files;    /* # inodes */
+               fsfilcnt_t     f_ffree;    /* # free inodes */
+               fsfilcnt_t     f_favail;   /* # free inodes for unprivileged users */
+               unsigned long  f_fsid;     /* filesystem ID */
+               unsigned long  f_flag;     /* mount flags */
+               unsigned long  f_namemax;  /* maximum filename length */
+           };
+exercise:
+在多个挂载点挂载文件系统：
+mkdir testfs
+mkdir demo
+mount /dev/sdc1 testfs/
+mount | grep  sdc1
+/dev/sdc1 on /tmp/testfs type vfat (rw)
+/dev/sdc1 on /tmp/demo type vfat (rw)
+touch testfs/myfile
+ls demo
+
+绑定挂载:
+pwd
+/tmp/test1
+mkdir d1
+touch d1/x
+mkdir d2
+ls
+d1  d2
+mount --bind d1/ d2
+ls d2/
+x
+touch d2/y
+ ls d2/
+x  y
+ls d1/
+x  y
+递归绑定挂载
+mkdir top
+mkdir src1
+touch src1/aaa
+mount --bind src1/ top
+mkdir top/sub
+tree .
+.
+├── src1
+│   ├── aaa
+│   └── sub
+└── top
+    ├── aaa
+    └── sub
+mkdir src2
+touch src2/bbb
+tree .
+.
+├── src1
+│   ├── aaa
+│   └── sub
+├── src2
+│   └── bbb
+└── top
+    ├── aaa
+    └── sub
+ mount --bind src2/ top/sub
+tree .
+.
+├── src1
+│   ├── aaa
+│   └── sub
+├── src2
+│   └── bbb
+└── top
+    ├── aaa
+    └── sub
+        └── bbb
+mkdir  dir1
+mount --bind top/ dir1
+ tree .
+.
+├── dir1
+│   ├── aaa
+│   └── sub
+├── src1
+│   ├── aaa
+│   └── sub
+├── src2
+│   └── bbb
+└── top
+    ├── aaa
+    └── sub
+        └── bbb
+ mkdir dir2 
+mount --rbind top/ dir2
+ tree .
+.
+├── dir1
+│   ├── aaa
+│   └── sub
+├── dir2
+│   ├── aaa
+│   └── sub
+│       └── bbb
+├── src1
+│   ├── aaa
+│   └── sub
+├── src2
+│   └── bbb
+└── top
+    ├── aaa
+    └── sub
+        └── bbb
