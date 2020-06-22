@@ -1,0 +1,200 @@
+利用系统调用stat(),lstat()以及fstat(),可获取和文件有关的信息，其中大部分提取文件i节点
+#include <sys/stat.h>
+int stat(const char *pathname, struct stat *statbuf);
+int lstat(const char *pathname, struct stat *statbuf);
+int fstat(int fd, struct stat*statbuf);
+	All return 0 on success, or -1 on error;
+stat()会返回所命名文件的相关信息
+lstat()和stat()类似，区别在于如果文件属于符号链接，那么返回的信息针对的是符号链接本身（而非符号链接所指向的文件）
+fstat()则会返回由某个打开文件描述符所指代文件的相关信息
+系统调用stat()和lstat()无需对其操作的文件本身拥有任何权限，但针对pathname的父目录要有执行（搜索）权限。而只要供之以有效的文件描述符，fstat()系统调用总是成功
+struct stat {
+               dev_t     st_dev;     /* ID of device containing file */
+               ino_t     st_ino;     /* inode number */
+               mode_t    st_mode;    /* protection */
+               nlink_t   st_nlink;   /* number of hard links */
+               uid_t     st_uid;     /* user ID of owner */
+               gid_t     st_gid;     /* group ID of owner */
+               dev_t     st_rdev;    /* device ID (if special file) */
+               off_t     st_size;    /* total size, in bytes */
+               blksize_t st_blksize; /* blocksize for filesystem I/O */
+               blkcnt_t  st_blocks;  /* number of 512B blocks allocated */
+               time_t    st_atime;   /* time of last access */
+               time_t    st_mtime;   /* time of last modification */
+               time_t    st_ctime;   /* time of last status change */
+           };
+文件类型和权限
+st_mode字段内含有位掩码，起标识文件类型和指定文件权限的双重作用。
+|<-文件类型->| <-              权限                         ->|          
+|  |  |  |  | U |  G | T | R | W | X| R | W | X | R | W | X |
+U->set-user-ID
+G->set-group-ID
+T-sticky位
+针对stat结构中的st_mode来检查文件类型的宏
+常量					测试宏					文件类型
+S_IFREG				S_ISREG()				常规文件
+S_IFDIR				S_ISDIR()				目录
+S_IFCHR				S_ISCHR()				字符设备
+S_IFBLK				S_ISBLK()				块设备
+S_IFIFO				S_ISFIFIO()				FIFO或管道
+S_IFSOCK			S_ISSOCK()				套接字
+S_IFLINK			S_ISLINK()				符号链接
+想在<sys/stat.h>中获取S_IFSOCK,S_ISSOCK()的定义，必须定义_BSD_SOURCE特性测试宏，或是将_XOPNE_SOURCE定义为不小于500的值
+st_size字段标识文件的字节数。对于符号链接，则标识链接所指路径名的长度，以字节为单位。
+对于共享内存对象，该字段则表示对象的大小
+st_blocks字段标识分配给文件的总块数，块大小为512字节，其中包括了为指针块所分配的空间，其记录了实际分配给文件的磁盘块数量。如果文件内含空洞，该值将小于从相应文件字节数字段（st_size）的值
+执行显示磁盘使用情况的du -k file命令，便可获悉分配给文件的文件空间，单位是KB。
+st_blocksize字段是针对文件系统上文件进行IO操作的最优块大小（以字节为单位）。若IO采用的块大小小于该值，则被视为低效。一般而言st_blksize的返回值是4096
+
+各种函数对文件时间戳的影响
+函数			文件或目录				父目录						注释
+		a	m	c					a	m	c
+chmod			*												与fchmod()相同
+chown			*												与lchown()和fchown()相同
+exec	*
+link			*						*	*					影响第二个参数的父目录
+mkdir	*	*	*						*	*
+mkfifo	*	*	*						*	*
+mknod	*	*	*						*	*
+mmap	*	*	*												仅当对具有MAP_SHAREED属性的映射进行更新时，才会改变st_mtime和st_ctime
+msync		*	*												仅当修改文件时，才会改变时间戳
+open-
+creat	*	*	*						*	*					新建文件时
+open-
+creat		*	*												截断现有文件时
+pipe	*	*	*
+read	*														与readv(),pread()和preadv()相同
+readdir	*														readdir()可缓冲目录条目，仅当读取目录时，才会更新各时间戳
+removexattr		*												与fremovexattr()和removexattr相同
+rename			*						*	*					同时影响文件（更名前后）的父目录
+rmdir									*	*					与remove(directory)相同
+sendfile *														改变输入文件的时间戳
+setxattr		*												与fsetxattr和lsetxattr相同
+symlink *	*	*						*	*					设置链接（而非目标文件）的时间戳
+truncate	*	*												与ftruncate()相同，仅当文件大小改变时，才会改变时间戳
+unlink			*						*	*					与remove(file)相同。若之前的连接数大于1，会改变文件的st_ctime
+utime	*	*	*												与utimes(),futimes(),futimens(),lutimes()和utimensat()相同
+write		*	*												与writev(),pwrite()和pwritev()相同
+#include <utime.h>
+int utime(const char *pathname, const struct utimbuf *buf)
+	return 0  on success, or -1 on error;
+参数buf即可为NULL，也可为指向utimbuf结构的指针
+struct utimbuf{
+	time_t actime;
+	time_t modtime;
+};
+如果buf为NULL，那么会将文件的上次访问时间和修改时间同时设置程当前时间，这时，进程要么具有特权级别，要么其有效用户ID与该文件的用户ID（属主）相匹配，且对文件有写权限
+如果将buf指定为指向utimebuf结构的指针，则会使用该结构的相应字段区更新文件的上次访问和修改时间，此时，要么调用程序具有特权级别，要么进程的有效用户ID必须匹配文件的用户ID
+只要调用utime()成功，总会将文件的上次状态更改时间设置成当前时间
+
+linux中还提供了utimes()系统调用，其功能类似于utime()
+#include <sys/time.h>
+int utimes(const char *pathname, const struct timeval tv[2]);
+	return 0 on success, or -1 on error;
+utime()和utimes()之间最显著的差别在于后者可以以微秒级精度来指定时间值
+新的文件访问时间在tv[0]中指定，新的文件修改时间在tv[1]中指定
+
+futimes和lutimes()库函数的功能与utimes大同小异。前两者与后者之间的差异在于用来指定要更改时间戳文件的参数不同
+#include <sys/time.h>
+int futimes(int fd, const struct  timeval tv[2]);
+int lutimes(const char *pathname, const struct timeval tv[2]);
+	Both return 0 on success, or -1 on error;
+调用futimes()是，采用打开文件描述符指定文件
+调用lutimes()时，使用路径名来指定文件，只是不对链接解引用
+
+使用utimensat()和futimens()改变文件时间戳
+utimensat()系统调用，futimens是库函数
+#define _XOPEN_SOURCE 700
+#include <sys/stat.h>
+int utimensat(int dirfd, const char *pathname, const struct timespec times[2],int flags);
+	return 0 on success, or -1 on error;
+若有意将时间戳之一设置为当前时间，则可将相应的tv_nsec字段指定为特殊值UTIME_NOW,若希望某以时间戳保持不变，则需把相应的tv_nsec字段指定为特殊值UTIME_OMIT
+可将dirfd参数指定为AT_FDCWD,此时对pathname参数的解读和utimes（）类似，或者将其指定为指代目录的文件描述符
+flags参数可以为0， 或者AT_SYMLINK_NOFOLLOW,意即当pathname为符号链接时，不会对其进行解引用
+
+使用futimens()库函数可更新打开文件描述符fd所指代的各个文件时间戳
+#define _GNU_SOURCE
+#include <sys/stat.h>
+int futimens(int fd, const struct timespec times[2]);
+	return 0 on success, or -1 on error;
+其中，times参数的使用方法与utimensat()相同
+
+文件属主
+文件创建时，其用户ID“取自”进程的有效用户ID。而新建文件的组ID则“取自”进程的有效组ID，或父目录的组ID，组ID采用哪种方案取决于很多因素，文件系统就是一类
+确定新建文件组所有权的规则
+文件系统装配的选项				有无设置父目录的set-group-ID位						新建文件的组所有权取自何处
+-o grpid, -o bsdgroups			忽略												父目录组ID
+-o nogrpid,-o sysvgroups（默认）   无												进程的有效用户ID
+								有												父亲目录组ID
+改变文件属主
+chown()，fchown(),lchown()
+#include <unistd.h>
+int chown(const char *pathname, uid_t owner, gid_t group);
+#define _XOPEN_SOURCE 500
+#include <unistd.h>
+int lchown(const char *pathname, uid_t owner, gid_t group);
+int fchown(int fd, uid_t owner, gid_t group);
+	All return 0 on success, or -1  on error;
+参数owner和group分别为文件指定新的用户ID和组ID。若只打算改变其中一个，只需将另一个参数设置为-1，即可使之相关的ID保持不变
+如果文件的属主或属组发生改变，那么set-user-ID和set-group-ID权限也会随之关闭
+改变文件的属主和属组时，如果已屏蔽了属组的可执行权限位，或者要改变的是目录的所有权时，那么不会屏蔽set-group-ID权限位
+用来标识文件权限位的常量
+S_ISUID		04000		Set-user-ID
+S_ISGID		02000		Set-group-ID
+S_ISVTX		01000		sticky
+S_IRUSR		0400		user read 
+S_IWUSR		0200		user write
+S_IXUSR		0100		user execute
+S_IRGRP		040			group read
+S_IWGRP		020			group write
+S_IXGRP		010			group execute
+S_IROTH		04			other read
+S_IWOTH		02			other write
+S_IXOTH		01			other execute
+目录权限
+1.读权限：可列出（比如，ls命令）目录下的内容（即目录下的文件名）
+2.写权限：可在目录内创建，删除文件。注意，要删除文件，对文件本身无需任何权限
+3.可执行权限：可访问目录中的文件。因此有时也将目录的可执行权限称为search（搜索）权限
+拥有对目录的读权限，用户只是能查看目录中的文件列表。要访问目录内文件的内容，或者是文件的i节点信息，还需要对目录的执行权限
+反之，若拥有目录的可执行权限，而无读权限，只要知道目录内文件的名称，扔可对其进行访问，但不能列出目录下的内容（即目录所含的其他文件名）。在控制对公共目录访问时，这是一种常见的技术，简单而实用
+想要在目录中添加或删除文件，需要同时拥有对目录的执行和写权限
+内核会依次执行针对属主，属组以及其他用户的权限检查，只要匹配上述检查规则之一（我这边没有把规则记录下来），便会停止检查
+系统调用access()就是根据进程的真实用户和组ID（以及附属组ID），去检查对pathname参数所指定文件的访问权限
+#include <unistd.h>
+int access(const char *pathname, int mode);
+	return 0  if all permissions are grandted , otherwise -1
+F_OK, R_OK, W_OK,X_OK
+
+set-group-ID位有两种其他用途：
+	1.对于在以nogrpid选项装配的目录下新建文件，控制其群组从属关系
+	2.可用于强制锁定文件
+	在老的unix实现，提供sticky 位的目的在于让常用程序的运行速度更快。若对某程序文件设置了sticky位，则首次执行程序时，系统会将其文本拷贝于交换区中，即“粘”在交换区中，
+故而能提高后续执行的加载速度
+	在现代的unix实现，sticky权限位所起的作用全然不同于老的unix实现。作用于目录时，sticky权限位起限制删除位的作用。
+	为目录设置该位，则表明仅当非特权进程具有目录的写权限，且为文件或目录的属主时，才能对目录下的文件进行删除（unlink(),rmdir(),rename()）操作，特权进程
+	省去对属主的检查，可借此机制来创建多用户共享一个目录，各用户可在其下创建和删除属于自己的文件，但不能删除隶属于其他用户的文件
+	chmod +t tfile
+进程文件模式创建掩码：umask()
+	文件模式创建掩码（简称umask）会对open, mkdir中flags的mode设置进行修改，umask是一个进程属性
+	大多数shell的初始化文件会将umask默认设置为八进制022(----w--w-)
+#include <sys/stat.h>
+mode_t umask(mode_t mask);
+	always successfully returns the previous process umask;
+
+更改文件权限：chmod()和fchmod()
+#include <sys/stat.h>
+int chmod(const char *pathname, mode_t mode);
+#define _XOPEN_SOURCE 500
+#include <sys/stat.h>
+int fchmod(int fd, mode_t mode);
+	Both return 0 on success, or -1 on error;
+可能出现一种情况，即文件的组ID与创建文件进程的任一组ID都不匹配。正因如此，当非特权进程调用chmod ,fchmod时，若文件的组ID不等于进程的有效组ID或任一辅助组ID，内核则总是
+清除文件的set-group-ID权限位
+
+i节点标志
+在shell中，可通过执行chattr和lsattr命令来设置和查看i节点标志
+ lsattr hello 
+-------------e-- hello
+sudo  chattr  +ai hello 
+lsattr hello 
+----ia-------e-- hello

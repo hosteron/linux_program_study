@@ -1,0 +1,6 @@
+#include <linux/fs.h>
+if(ioctl(fd, FS_IOC_GETFLAGS, &attr) == -1)
+	errExit("ioctl");
+attr |= FS_NOATIME_FL;
+if(ioctl(fd, FS_IOC_SETFLAGS, &attr) == -1)
+	errExit("ioctl");
