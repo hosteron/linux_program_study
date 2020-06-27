@@ -1,0 +1,62 @@
+EA命令空间
+命名格式为namespace.name.其中namespace用来把EA功能上分为截然不同的几大类，而name则用来在既定命令空间内唯一标识某个EA
+namespace有4个:
+user EA 将在文件权限检查的制约下由非特权进程操控
+	获取user EA ,需要读权限；修改user EA 需要写权限，欲将user EA 与一文件关联，在装配底层文件系统时需要带有user_xattr选项
+	mount -o  user_xattr device directory
+trusted EA:是由用户进程“驱使“，但是需要具有特权
+system EA:供内核使用，将系统对象与一个文件关联。目前仅支持访问控制列表
+security EA：
+	1.用来存储服务于操作系统安全模式的文件安全标签；
+	2.将可执行文件与能力关联起来
+setfattr -n user.x -v "The past is not dead." tfile
+setfattr  -n user.y -v "In fact, it`s not even past." tfile
+getfattr -n user.x tfile
+ getfattr -d tfile 
+# file: tfile
+user.x="The past is not dead."
+user.y="In fact, it^s not even past."
+setfattr -n user.x tfile
+getfattr -d tfile
+# file: tfile
+user.x
+user.y="In fact, it^s not even past."
+setfattr -x user.y tfile
+getfattr -d tfile 
+# file: tfile
+user.x
+
+getfattr -m 'pattern' file
+pattern的默认值为”^user\.“.可执行如下命令，列出一个文件的所有EA值
+getfattr -m - file
+
+设置：
+#include <sys/xattr.h>
+int setxattr(const char *pathbname, const char *name, const void *value, size_t size, int flags);
+int lsetxattr(const char *pathname, const char *name, const void *value, size_t size, int flags);
+int fsetxattr(int fd, const char *name, const void *value, size_t size, int flags);
+	all return 0  on success, or -1 on error;
+
+flags:
+	XATTR_CREATE
+	XATTR_REPLACE
+获取：
+#include <sys/xattr.h>
+ssize_t getxattr(const char *pathname, const char *name, void *value, size_t size);
+ssize_t lgetxattr(const char *pathname, const char *name, void *value, size_t size);
+ssize_t fgetxattr(int fd, const char *name, void *value, size_t size);
+	all return (nonnegative) size if EA value on success, or -1 on error;
+
+删除EA：
+#include <sys/xattr.h>
+int removexattr(const char *pathname, const char *name);
+int lremovexattr(const char *pathname, const char *name);
+int fremovexattr(int fd, const char *name);
+	all return 0 on success, or -1 on error;
+获取与文件相关联的所有EA的名称
+#include <sys/xattr.h>
+ssize_t listxattr(const char *pathname, char *list, size_t size);
+ssize_t llistxattr(const char *pathname, char *list, size_t  size);
+ssize_t flistxattr(int fd , char *list, size_t size);
+	all return number of bytes copied into list on success, or -1 on error;
+	
