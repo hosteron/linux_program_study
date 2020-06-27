@@ -1,0 +1,79 @@
+想要在ext文件系统上创建acl,装配相应的文件系统时需要带mount -o acl选项
+ACL记录
+每条ACE都有3部分组成：
+	1.标记类型：表示该记录作用于一个用户，组还是其他类型的用户
+	2.标记限定符（可选项）标识特定的用户或组（亦即，某个用户ID或组ID）
+	3.权限集合：本字段包含所授权的权限信息（读，写及执行）
+
+acl的长短文件格式
+执行setfacl和getfacl命令，或是使用某些acl库函数操控ACL时，需指明ace的文本表现形式。ACE的文本格式有两种
+	1.长文本格式ACL：每行都包含一条ACE，还可以包含注释，注释需以“#”开始，直至行结尾
+	2，短文本格式的ACL：包含一系列以“，”分隔的ACE
+	无论上述的哪种格式，每条ACE都由以“：”分隔的3部分组成
+	tag-type:[tar-qualifier]:permissions
+标记文本格式		是否存在标记限定符			对应的标记类型			ACE用途
+user				N					ACL_USER_OBJ		文件属主
+u,user				Y					ACL_USER			特定用户
+g,group				N					ACL_GROUP_OBJ		文件组
+g,group				Y					ACL_GROUP			特定组
+m,mask				N					ACL_MASK			组分类掩码
+o,other				N					ACL_OTHER			其他用户
+
+判断权限的规则
+1.先判断是否是特权进程
+2.看有效用户id和文件属主是否同一个
+3.有效用户id和某一个ACL_USER相同，权限和ACL_MASK相与
+4.进程组id或附属组之一和文件属组匹配，则使用ACL_GROUP_OBJ和ACL_MASK相与来判断
+5.进程组id和ACL_GROUP想匹配，这使用之与ACL_MASK相与来判断
+6.用ACL_OTHER来判断
+
+shell中getfacl和setfacl命令
+getfacl  note 
+# file: note
+# owner: xiangzhou
+# group: xiangzhou
+user::rw-
+group::rw-
+other::r--
+
+ls -l note 
+-rw-rw-r-- 1 xiangzhou xiangzhou 1589  6月 27 17:52 note
+
+getfacl  --omit-header note 
+user::rw-
+group::rw-
+other::r--
+
+setfacl  -m u:newuser:rx,g:telnetd:x note
+getfacl  note
+# file: note
+# owner: xiangzhou
+# group: xiangzhou
+user::rw-
+user:newuser:r-x
+group::rw-
+group:telnetd:--x
+mask::rwx
+other::r--
+
+ ls note -l
+-rw-rwxr--+ 1 xiangzhou xiangzhou 2038  6月 27 18:01 note
+
+setfacl带-m选项可修改现有ACE,或者，当给定标记类型和限定符的ACE不存在时，会追加新的ACE。setfacl命令还可使用-R选项，将指定的ACL“递归相应的目录树中的所有文件”
+setfacl -x 则用来从ACL中删除记录
+	指向上述操作时，setfacl命令会自动将掩码型ACE调整为所有组分类ACE权限的集合。若不想进行这样的调整，执行setfacl 命令时要带上-n选项
+最后需要说明的是，执行带-b选项的setfacl命令，可从ACL中删除所有扩展ACE，而值保留最小ACE（即，用户，组和其他）
+
+默认ACL与文件创建
+当进程访问与该ACL相关的文件时，将使用访问型ACL来判定进程对文件的访问权限。针对目录，还可创建第二种ACL：默认型ACL
+	访问型的acl存储与system.posix_acl_access的扩展属性中
+	默认型的acl存储在system.posix_acl_default的扩展属性中， 其决定了在目录下所创建文件或子目录的ACL和权限
+想查看和设置与目录相关的默认型ACL，需要执行带有-d选项的getfacl和setfacl命令
+
+mkdir sub
+setfacl -d -m u::rwx sub
+getfacl -d --omit-header sub
+
+执行带有-k选项的setfacl命令，可删除针对目录而设的默认型ACL
+
+其它内容为在编程时，使用的一些接口，在这里我就不做记录了，基本用不到
