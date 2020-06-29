@@ -1,0 +1,170 @@
+i-node表的编号始于1，而非0，因为若目录条目的i-node的值为0，则表明该条目未使用；i-node 1用来记录文件系统的坏块。
+文件系统根目录（/）总是存储在i-node条目2中，所以内核在解析路径名时就知道从哪里着手
+文件名是通过目录列表内的一个映射来定义文件名称。其妙用在于，能够在相同或者不同目录中创建多个名称，每个均指向相同的i-node节点
+仅当i-node的链接计数降为0时，也就是移除了文件的所有名字时，才会删除（释放）文件的i-node记录和数据块
+	总结如下：rm 命令从目录列表中删除一个文件名，将相应i-node的链接计数减一，若链接计数因此而降为0，则还将该移除文件名所指代的i-node和数据块
+对硬链接的限制有二，均可用符号链接来加以规避
+	1.因为目录条目（硬链接）对文件的指代采用了i-node编号，而i-node编号的唯一性仅在一个文件系统之内才能得以保障，所以硬链接必须与其指代的文件在同一个文件系统中
+	2.不能为目录创建硬链接，从而避免出现令诸多系统程序陷于混乱的链路环路
+
+符号链接指代一个文件名，而非i-node编号，所以可以用来链接不同文件系统中的一个文件。
+有一点约定俗成的：总是会对路劲名中目录部分（即最后一个斜线字符前的所有组成部分）的符号链接进行解除引用操作
+
+创建和移除（硬）链接：link()和ulink()
+#include <unistd.h>
+int link(const char *oldpath, const char *newpath);
+	return 0 on success, or -1 on error;
+	若oldpath中提供的是一个已存在文件的路径名，则系统调用link()将以newpath参数所指代的路径名创建一个新链接。若newpath指定的路径名已然存在，则不会将其覆盖；相反将产生一个错误（EEXIST）
+#include <unistd.h>
+int unlink(const char *pathname);
+	returns 0 on success, or -1 on error;
+unlink()系统调用不会对符号链接进行解引用操作，若pathname 为符号链接，则移除链接本身，而非链接指向的名称
+
+仅当关闭所有文件描述符时，方可删除一个已打开的文件
+	内核除了为每个i-node维护链接计数之外，还对文件的打开文件描述计数
+
+更改文件名：rename()
+#include <stdio.h>
+int rename(const char *oldpath, const char *newpath)
+	returns 0 on success, or -1 on error;
+rename()调用仅操作目录条目，而不移动文件数据。改名既不影响指向该文件的其他硬链接，也不影响持有该文件打开文件描述符的任何进程，因为这些文件描述符指向的是打开文件描述，（在调用open()之后）与文件名并无瓜葛
+rename()系统调用对其两个参数中的符号链接均不进行解引用。
+oldpath和newpath所指代的文件必须位于同一文件系统。之所有如此，是因为目录内容由硬链接列表组成，且硬链接所指向的i-node与目录位于同一文件系统，如前所述，rename()仅限于操作目录列内容。试图将一个文件重命名至不同的文件系统，需要使用mv，将内容拷贝到另一文件系统，然后再在本地删除之
+
+symlink()系统调用会针对有filepath所指定的路径名创建一个新的符号链接-linkpath(想移除符号链接，需使用unlink()调用)
+#include <unistd.h>
+int symlink(const char *filepath, const char *linkpath);
+	returns 0 on success, or  -1 on error;
+若linkpath中给定的路径名已经存在，则调用失败
+
+将符号链接字符串的一份副本置于buffer指向的字符数组中
+#include <unistd.h>
+ssize_t readlink(const char *pathname, char *buffer, size_t bufsiz);
+	return number of bytes placed in buffer on success , or -1 on error;
+
+创建和移除目录：mkdir () 和rmdir()
+#include <sys/stat.h>
+int mkdir (const char *pathname, mode_t mode);
+	调用会忽略在mode中设置set-group-ID位（S_ISGID）.相反，若对其父目录设置了set-group-ID位，则同样会对新建目录设置该权位。
+	对set-user-ID位始终处于关闭状态，因为该位对目录没有意义
+	会设置粘滞为(S_ISVTX)
+#include <unistd.h>
+int rmdir(const char *pathname);
+	returns 0 on success, or -1 on error;
+	要使rmdir()调用成功，则要删除的目录必须为空。如果pathname的最后一部分为符号链接，那么rmdir()调用将不对其进行解引用操作，并返回错误，同时将errno设置程ENOTDIR
+
+移除一个文件或目录remove()
+#include <stdio.h>
+int remove(const char * pathname);
+	returns 0 on success, or -1 on error;
+	与unlink(),rmdir()一样，remove不对符号链接进行解引用操作，若pathname是一个符号链接，则remove会移除链接本身，而非链接所指向的文件
+
+#include <dirent.h>
+DIR *opendir(const char *dirpath);
+	returns directory stream handle, or NULL on error;
+
+除了要创建的目录流所针对的目录由打开文件描述符所指代，fdopendir()并无用处
+#include <dirrent.h>
+DIR *fdopendir(int fd);
+	returns directory stream handle, or NULL on error;
+
+readdir()函数从一个目录流中读取连续的条目
+#include <dirent.h>
+struct dirent *readdir(DIR *dirp);
+	returns pointer to a statically allocated structure describing next directory entry  , or  NULL on end-of-directory or  error;
+struct dirent {
+               ino_t          d_ino;       /* inode number */
+               off_t          d_off;       /* not an offset; see NOTES */
+               unsigned short d_reclen;    /* length of this record */
+               unsigned char  d_type;      /* type of file; not supported
+                                              by all filesystem types */
+               char           d_name[256]; /* filename */
+           };
+    lstat()可获得更多信息，所指向的路径名由之前调用opendir()时指定的dirpath参数与"/"字符以及d_name字段的返回值拼接组成
+readdir（）返回并未对文件名进行排序，而是按照文件在目录中出现的天然次序（这取决于文件系统向目录添加文件时所遵循的次序，及其在删除文件后，对目录列表中空隙的填补方式）
+	ls -f 对文件列表的排列与调用readdir()时一样，均未做排序处理
+	使用scandir()函数可以获得经过排序处理的文件列表，且排序规则可由程序员定义
+
+如果目录内容恰逢应用调用readdir()扫描该目录时发生变化，那么应用程序可能无法观察到这些变动
+rewinddir()函数可将目录流移动到起点，以便对readdir()的下一次调用将从目录的第一个文件开始
+#include <dirent.h>
+void rewinddir(DIR *dirp);
+
+closedir()函数将由dirp指代，处于打开状态的目录流关闭，同时释放流所使用的资源
+#include <dirent.h>
+int closedir(DIR *dirp);
+	returns 0 on success, or -1 on error;
+
+目录流与文件描述符
+	有一个目录流，就有一个文件描述符与之关联。dirfd()函数返回与dirp目录流相关联的文件描述符
+#include <dirent.h>
+int dirfd(DIR *dirp);
+	return file descriptor on success, or -1 on error;
+例如，将dirfd()返回的文件描述符传递给fchdir()，就可以把进程的当前工作目录改成相应目录
+这里值得一提的是，opendier()会为与目录流相关联的文件描述符自动设置close-on-exec标志
+#include <dirent.h>
+int readdir_r(DIR *dirp, struct dirent *entry, struct dirent ** result);
+	returns 0 on success, or a positive error number  on error;
+
+文件树遍历：nftw()
+#define _XOPEN_SOURCE 500
+#include <ftw.h>
+int nftw(const char *dirpath, int(*func)(const char *pathname, const struct stat *statbuf, int typeflag, struct FTW*ftwbuf), int nopenfd, int flags);
+	return 0 after successful walk of entire tree , or -1 on error or the first nonzero value returned by a call to func
+	默认情况下，nftw()会针对给定的树执行未排序的前序遍历，即对各目录的处理要先于各目录下的文件和子目录
+
+#include <unistd.h>
+char *getcwd(char *cwdbuf, size_t size);
+	returns cwdbuf on success, or NULL on error;
+
+改变当前工作目录
+chdir()系统调用将调用进程的当前工作目录改变为pathname指定的相对或绝对路径名，对符号链接会解引用
+#include <unistd.h>
+int chdir(const char *pathname);
+	returns 0 on success, or -1 on error;
+fchdir()系统调用和chdir的含义一样，只是将pathname改用文件描述符，该描述符是之前调用open()打开相应目录时获得的
+#define _XOPNE_SOURCE 500
+#include <unistd.h>
+int fchdir(int fd);
+	return 0 on success, or -1 on error;
+
+针对目录文件描述符的相关操作
+...at 有一系列的系统调用，以openat()为例
+#define _XOPEN_SOURCE 700
+#include <fcntl.h>
+int openat(int dirfd, const  char *pathname, int flags, .../**mode_t mode/);
+	returns file descriptor on success, or -1 on error;
+openat()系统调用类似传统的open()系统调用，只是添加了一个dirfd参数，其作用如下：
+	1.如果pathname中为一个相对路径，那么对其解释则以打开文件描述符dirfd所指向的目录作为参考点，而非进程的当前工作目录
+	2.如果pathname中为一相对路径，且dirfd中所含为特殊值AT_FDCWD,那么对pathname的解释则相对与进程的当前工作目录
+	3.如果pathname为绝对路径，那么将忽略dirfd参数
+	之所以要支持这些at条用，原因有二：
+	1.当调动open()打开位于当前工作目录之外的文件时，可能会发生某些竞态条件。比如路径中的前缀发生改变，就可能导致竞争；解决的方法可以打开其路径的一个描述符号，然后用openat()之类的at系统调用
+	2.工作目录是进程的属性之一，为进程中所有线程所共享。而对某些程序而言，需要针对不同线程拥有不同的“虚拟”工作目录。将openat()与应用所维护的目录文件描述符相结合，就可以模拟这一功能
+
+改变进程的根目录：chroot()
+每个进程都有一个根目录，该目录是解释绝对路径时的起始点
+特权级进程通过chroot()系统调用能够改变进程的根目录
+#define _BSD_SOURCE
+#include <unistd.h>
+int chroot(const char *pathname);
+	returns 0 on success, or -1 on error;
+	其会对符号链接进行解引用
+	鉴于这会将应用程序限定于文件系统的特定区域，有时也将此称为设立了一个chroot监禁区
+	ftp 程序是应用chroot（）的典型实例之一。作为一种安全措施，当用户匿名登录ftp时，ftp程序将使用chroot()为新进程设置根目录-一个专门预留给匿名登录用户的目录
+	这里所依赖的事实是根目录是其自身的父目录。也就是说/.. 是/的一个链接，所以改变目录到/再执行cd ..命令时，用户依然会待在同一目录下
+	
+	即便是无特权程序，也必须小心方法如下几条可能的越狱路线
+	1.调用chroot()未改变当前的工作目录。因此，通常应在调用chroot()之前或之后调用一次chdir()来改变当前工作目录（例如，在chroot()之后执行chdir("/")）
+	2.如果进程针对监禁区之外的某以目录持有一个带来文件描述符，那么结合fchdir()和chroot（）即可越狱成功
+解析路径名
+#include <stdlib.h>
+char *realpath(const char *pathname, char *resolved_path);
+	returns pointer to resolved pathname on success, or NULL on error;
+	如果resolved_path参数指定为NULL，库会为你分配一个内容，然后返回给你，你使用完了之后，记得free()
+解析路径名字符串
+#include <libgen.h>
+char *dirname(char *pathname);
+char *basename(char *pathname);
+	Both return a pointer to a null-terminated (and  possibly statically allocated )string
+	
