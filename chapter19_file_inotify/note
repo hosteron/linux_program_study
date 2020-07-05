@@ -1,0 +1,83 @@
+使用inotify API有以下几个关键步骤
+1.应用程序使用inotify_init()来创建一inotify实例，该系统调用所返回的文件描述符用于后续操作中指代该实例
+2.应用程序使用inotify_add_watch()向inotify实例的监控列表中添加条目，借此告知内核哪些文件是自己的兴趣所在。每个监控项都包含一个路径名以及相关的位掩码。位掩码针对路径名指定了所要监控的事件集合。作为函数结果，inotify_add_watch()将返回一监控描述符，用于在后续
+操作中指代该监控项（系统调用inotify_rm_watch()执行其逆向操作，将之前添加入inotify实例的监控项移除）
+3.为获得事件通知，应用程序需针对inotify文件描述符执行read()操作。每次对read(()的成功调用，都会返回一个或多个inotify_event结构，其中各自记录了处于inotify实例监控之下的某一路径名所发生的事件
+4.应用程序在结束监控时会关闭inotify文件描述符。这会自动清除与inotify实例相关的所有监控项
+
+inotify_init()系统调用可创建一新的inotify实例
+#include <sys/inotify.h>
+int inotify_init();
+	returns  file descriptor on success, or -1 on error;
+自内核2.6.27开始，支持一个新的inotify_init1()调用，可添加额外参数flag -> IN_CLOEXEC , IN_NONBLOCK
+
+#include <sys/inotify.h>
+int inotify_add_watch(int fd , const char *pathname, uinit32_t mask)
+	returns watch descriptor on success, or -1 on error;
+调用程序必须对该文件具有读权限（调用inotify_add_watch()时，会对文件权限做一次性检查。只要监控项继续存在，即使有人更改了文件权限，使调用进程不再对文件具有读权限，调用程序依然会继续收到文件的通知消息）
+
+#include <sys/inotify.h>
+int inotify_rm_watch(int fd , uint32_t wd);
+	returns 0 on success, or -1 on error;
+删除控制项会为该控制描述符生成IN_IGNORED事件
+inotify事件
+位值					in			out				描述
+IN_ACCESS 			*			*				文件被访问（read()）
+IN_ATTRIB			*			*				文件元数据改变
+IN_CLOSE_WRITE		*			*				关闭为了写入而打开的文件
+IN_CLOSE_NOWRITE	*			*				关闭以只读方式打开的文件
+IN_CREATE			*			*				受监控目录内创建文件/目录
+IN_DELETE			×			×				在受监控目录内删除文件、目录
+IN_DELETE_SELF		×			×				删除受监控目录、文件本身
+IN_MODIFY			×			×				文件被修改
+IN_MOVE_SELF		×			×				移动受监控目录、文件本身
+IN_MOVED_FROME		×			×				文件移出受监控目录之外
+IN_MOVED_TO			×			×				文件移入受监控目录
+IN_OPEN				×			×				文件被打开
+IN_ALL_EVNETS		×							以上所有输出事件的统称
+IN_MOVE				×							IN_MOVED_FROM | IN_MOVED_TO
+IN_CLOSE			*							IN_CLOSE_WRITE|IN_CLOSE_NOWRITE
+IN_DONT_FOLLOW		*							不对符号链接解引用
+IN_MASK_ADD			×							将时间追加到pathname的当前监控掩码
+IN_ONESHOT			×							只监控pathname的一个事件
+IN_ONLYDIR			×							pathname不为目录时失败
+IN_IGNORED						×				监控项为内核或应用所移除
+IN_ISDIR						×				name中所返回的文件名为路径
+IN_Q_OVERFLOW					×				事件队列溢出
+IN_UNMOUNT						×				包含对象的文件系统遭卸载
+
+struct inotify_event
+{
+  int wd;		/* Watch descriptor.  */
+  uint32_t mask;	/* Watch mask.  */
+  uint32_t cookie;	/* Cookie to synchronize two events.  */
+  uint32_t len;		/* Length (including NULs) of name.  */
+  char name __flexarr;	/* Name.  */
+};
+
+1.移除监控项时，会产生IN_IGNORED事件。起因可能有两个：
+	a.应用程序使用了inotify_rm_watch()系统调用显示的移除了监控项
+	b.因受监控对象被删除或其所驻留的文件系统遭卸载，导致内核隐式删除监控项目
+		以IN_ONESHORT而建立的监控项因事件触发而遭到自动移除时，不会产生IN_IGNORED事件
+2.IN_UNMOUNT事件会通知应用程序包含监控项对象的文件系统已遭到卸载。该事件发生后，还会产生一个IN_IGNORED的事件
+
+当受监控目录中有文件发生事件时，name字段返回一个以空字符结尾的字符串，以标识该文件。若受监控对象自己发生事件，则不适用name字段，将len设置成0
+单个inotify事件的长度是sizeof(struct inotify_event)+len
+如果传递给read()的缓冲区过小，无法容纳下一个inotify_event的结构，那么read()调用将以失败告终，并以EINVAL错误告之
+传递给read()的缓冲区至少为sizeof(struct inotify_event)+NAME_MAX+1字节
+
+针对文件描述符fd调用ioctl(fd,FIONREAD,&numbytes),会返回其所指代的inotify实例中的当前刻度字节数
+
+在事件队列的末尾追加一个新事件，如果此事件和队列当前结尾事件拥有与相同的wd,mask,cookie和masl，那么内核会将两者合并，这也意味着使用inotify将无法可靠判定出周期性事件的发生次数和频率
+
+
+队列限制和/proc文件
+ls /proc/sys/fs/inotify/
+max_queued_events  
+调用inotify_init()时，使用该值为新inotify实例队列中的事件数量设置上限
+max_user_instances  
+对每个真实用户ID创建的inotify实例数的限制值
+max_user_watches
+对由每个真实用户ID创建的监控项数量的限制值
+
+
