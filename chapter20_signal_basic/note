@@ -1,0 +1,163 @@
+信号是事件发生时对进程的通知机制。有时也称之为软件中断。信号与硬件中断的相似之处在于打断了程序执行的正常流程
+一个（具有合适权限的）进程能够向另一进程发送信号。信号的这一用法可作为一种同步技术，甚至是进程间通信的原始形式。进程也可以向自身发送信号。然而，发往进程的诸多信号，通常都是源于内核。
+引发内核为进程产生信号的各类事件如下：
+1.硬件发生异常，即硬件检测到一个错误条件并通知内核，随即再由内核发送相应信号给相关进程。
+	硬件异常的例子包括执行一条异常的机器语言指令，诸如，被0除，或者引用了无法访问的内存区域
+2.用户键入了能够产生信号的终端特殊字符。
+3.发生软件事件。
+	例如，针对文件描述符的输出变为有效，调整窗口大小，定时器到期，进程执行的CPU事件超限，或者进程的某个子进程退出
+
+信号分为两大类
+	1.传统或者标准信号，编号范围是1~31
+	2.实时信号
+信号因某些事件而产生。信号产生后，会于稍后被传递给某一进程，而进程也会采取某些措施来相应信号。在产生和到达期间，信号处于等待状态
+
+通常，一旦（内核）接下来要调度该进程运行，等待信号会马上送达，或者如果进程正在运行，则会立即传递信号（例如，进程向自身发送信号）。然而，有时需要确保一段代码不为传递来的信号所中断。
+	为了做到这一点，可以将信号添加到进程的信号掩码中
+
+信号到达之后，进程视具体信号执行如下默认操作之一
+1.忽略信号：也就是说，内核将信号丢弃，信号对进程没有产生任何影响（进程永远不知道曾经出现过该信号）
+2.终止（杀死）进程
+3.产生核心转储文件，同时进程终止
+4.停止进程：暂停进程的执行
+5.于之前暂停后再度恢复进程的执行
+
+除了根据特定信号而采取默认行为之外，程序也能改变信号到达时的响应行为。
+	1.采取默认行为
+	2.忽略信号
+	3.执行信号处理程序
+请注意：
+	无法将信号处置设置为终止进程或者转储核心（除非这是对信号的默认处置）。效果最为近似的是为信号安装一个处理程序，并于其中调用exit()或者abort().abort()为进程产生一个SIGABRT信号，该信号将引发进程转储核心文件并终止
+
+ 1) SIGHUP	 2) SIGINT	 3) SIGQUIT	 4) SIGILL	 5) SIGTRAP
+ 6) SIGABRT	 7) SIGBUS	 8) SIGFPE	 9) SIGKILL	10) SIGUSR1
+11) SIGSEGV	12) SIGUSR2	13) SIGPIPE	14) SIGALRM	15) SIGTERM
+16) SIGSTKFLT	17) SIGCHLD	18) SIGCONT	19) SIGSTOP	20) SIGTSTP
+21) SIGTTIN	22) SIGTTOU	23) SIGURG	24) SIGXCPU	25) SIGXFSZ
+26) SIGVTALRM	27) SIGPROF	28) SIGWINCH	29) SIGIO	30) SIGPWR
+31) SIGSYS	34) SIGRTMIN	35) SIGRTMIN+1	36) SIGRTMIN+2	37) SIGRTMIN+3
+38) SIGRTMIN+4	39) SIGRTMIN+5	40) SIGRTMIN+6	41) SIGRTMIN+7	42) SIGRTMIN+8
+43) SIGRTMIN+9	44) SIGRTMIN+10	45) SIGRTMIN+11	46) SIGRTMIN+12	47) SIGRTMIN+13
+48) SIGRTMIN+14	49) SIGRTMIN+15	50) SIGRTMAX-14	51) SIGRTMAX-13	52) SIGRTMAX-12
+53) SIGRTMAX-11	54) SIGRTMAX-10	55) SIGRTMAX-9	56) SIGRTMAX-8	57) SIGRTMAX-7
+58) SIGRTMAX-6	59) SIGRTMAX-5	60) SIGRTMAX-4	61) SIGRTMAX-3	62) SIGRTMAX-2
+63) SIGRTMAX-1	64) SIGRTMAX
+SIGKILL:
+	此信号为“必杀”信号，处理器程序无法将其阻塞，忽略或者捕获
+SIGSTOP
+	这是一个必停信号，处理器程序无法将其阻塞，忽略或者捕获，故而总是能停止继承
+SIGTERM
+	这是kill和killall 命令所发送的默认信号
+#include <signal.h>
+void (*signal(int sig, void (*handler)(int)))(int)
+	returns previous signal disposition on success, or SIG_ERR on error;
+SIG_DFL
+	将信号处置重置为默认值
+SIG_IGN
+	忽略该信号
+#include <signal.h>
+int kill(pid_t pid, int sig);
+	returns 0 on success, or -1 on error;
+pid参数标识一个或多个目标进程，而sig则指定了要发送的信号
+	1.如果pid大于0，那么发送信号给由pid指定的进程
+	2.如果pid等于0，那么会发送信号给与调用进程同组的每个进程，包括调用进程本身
+	3.如果pid小于-1，那么会向组ID等于该pid绝对值的进程组内所有下属进程发送信号
+	4.如果pid等于-1，那么信号发送范围是：调用进程有权将信号发往的每个目标进程，除去init和调用进程本身。这个也叫广播信号
+如果并无进程和指定的pid相匹配，那么kill()调用会失败，同时将errno设为ESRCH("查无此进程")
+
+进程要发送信号给另一个进程，还需要适当的权限
+	1.特权级进程可以向任何进程发送信号
+	2.以root用户和组运行的init进程，是一个特例，仅能接受已安装了处理器函数的信号
+	3.如果发送者的实际或有效用户ID匹配于接受者的实际用户ID或者保存设置用户ID，那么非特权进程可以向另一个进程发送信号
+	4.SIGCONT信号需要特殊处理。无论对用户ID的检查结果如何，非特权进程可以向同一会话中的任何其他进程发送这一信号。利用这一规则，运行作业控制的shell可以重启已停止的作业（进程组），即使作业进程已经修改了他们的用户ID
+如果进程无权发送信号给所请求的pid，那么kill（）调用失败，且将errno设置为EPERM
+若pid所指为一系列进程（即pid为负值）时，只要可以向其中之一发送信号，则kill（）调用成功
+
+kill（）系统调用还有另一种功能。若将参数sig指定为0（即所谓空信号），则无信号发送。相反，kill()仅会区执行错误检查，查看是否可以 向目标进程发送信号。从另一角度来看，这意味着，可以使用空信号来检查具有特定进程ID的进程是否存在
+	这种方法并不可靠,因为即使想要测试的进程已经消失，但是内核会复用相同的pid来启动其他进程，还有可能这个进程是一个僵尸进程
+	
+	可以使用其他技术来检查一个进程是否存在
+	1.wait()系统调用。这些调用仅用监控调用者的子进程
+	2.信号量和排他文件锁
+	3.诸如管道和FIFO之类的IPC通道。令监控进程持有针对通道进程读操作的打开文件描述符
+	4./proc/PID接口
+	
+#include <signal.h>
+int raise(int sig)
+	returns 0 on success, or nonzero on error;
+在单线程程序中，调用raise()相当于对kill()的如下调用：
+kill(getpid(),sig);
+支持线程的系统会将raise()实现为：
+pthead_kill(pthread_self(), sig);这意味着将信号传递给调用raise()的特定线程。相比之下，kill(getpid(),sig)调用会发送一个信号给调用进程，并可将该信号传递给该进程的任一线程
+信号集 sigset_t
+#include <signal.h>
+int sigemptyset(sigset_t *set);
+int sigfillset(sigset_t *set);
+	Both return 0 on success, or -1 on error;
+#include <signal.h>
+int sigaddset(sigset_t *set, int sig);
+int sigdelset(sigset_t *set, int sig);
+	Both return 0 on success, or -1 on error;
+#include <signal.h>
+int sigismember(const sigset_t *set, int sig)
+	Returns 1 if sig is a member of set, otherwise 0
+GNU C库还实现了3个非标准函数,是对上述信号集标准函数的补充
+#define _GNU_SOUCE
+#include <signal.h>
+int sigandset(sigset_t *set, sigset_t *left, sigset_t *right); 将left,right集的交集设置到set中
+int sigorset(sigset_t *dest, sigset_t*left, sigset_t *right);将left,right集的并集设置到dest中
+	Both return 0 on success, or -1 on error;
+int sigisemptyset(const sigset_t *set);
+	returns if sig is empty, otherwise 0
+信号掩码(阻塞信号传递)
+内核会为每个进程维护一个信号掩码,即一组信号,并阻塞其对改进程的传递.如果将遭阻塞的信号发送给某进程, 那么对信号的传递将延后,直到从进程信号掩码中移除该信号,从而解除阻塞为止
+信号掩码实际属于线程属性,在多线程进程中,每个线程都可以使用pthread_sigmask()函数来独立检查和修改其信号掩码
+
+向信号掩码中添加一个信号,有如下几个方式:
+1.当调用信号处理函数时,可将引发调用的信号自动添加到信号掩码中.是否发生这一情况,要视sigaction()函数在安装信号处理程序时所使用的标志而定
+2.使用sigaction()函数建立信号处理程序时,可以指定一组额外信号,当调用改处理器程序时将其阻塞
+3.使用sigpromask()系统调用,随时显式向信号掩码中添加或移除信号
+#include <signal.h>
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+	returns 0 on success,  or -1 on error;
+SIG_BLOCK
+	将set指向信号集内的指定信号添加到信号掩码中.
+SIG_UNBLOCK
+	将set指向信号集中的信号从信号掩码中移除
+SIG_SETMASK
+	将set指向的信号集赋给信号掩码
+上述各种情况下,若oldset参数不为空,则指向一个sigset_t结构缓冲区,用于返回之前的信号掩码
+如果想要获取信号掩码而对其不作改动,那么可将set参数指为空,这时将忽略how参数
+系统将忽略阻塞SIGKILL和SIGSTOP信号的请求.如果试图阻塞这些信号,sigprocmask函数既不会关注,也不会产生错误
+
+处于等待状态的信号
+	如果某进程接受一个该进程正在阻塞的信号,那么会将改信号添加进进程的等待信号集中.当(且如果)之后解除了对该信号的锁定后,会随之将信号传递给此进程.为了确定进程中处于等待状态的是哪些信号,可以使用sigpending()
+#include <signal.h>
+int sigpending(sigset_t *set);
+	returns 0 on success, or -1 on error
+如果修改了对等待信号的处理,那么当后来接触对信号的锁定时,将根据新的处理来处理信号.
+	这项技术虽然不经常使用,但还是存在一个应用场景,即将对信号的处置设置为SIG_IGN或者SIG_DFL(如果信号的默认行为是忽略),从而阻止传递处于等待状态的信号.因此,会将信号从进程的等待信号集中移除,从而不传递该信号
+
+不对信号排队处理
+	等待信号集是一个掩码,仅表明一个信号是否发生,而未表明其发生的次数.换言之,如果同一信号在阻塞状态下发生多次,那么将该信号记录在等待信号集中,并在稍后仅传递一次
+
+#include <signal.h>
+int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact)
+	return o on success, or -1 on error;
+struct sigaction {
+               void     (*sa_handler)(int);
+               void     (*sa_sigaction)(int, siginfo_t *, void *);
+               sigset_t   sa_mask;
+               int        sa_flags;
+               void     (*sa_restorer)(void);
+           };
+仅当sa_handler未处理程序地址时,即SIG_DFL , SIG_IGN之外,sa_mask, sa_flags才有效果
+sa_mask字段定义了一组信号,在调用sa_handler所定义的处理程序时,将阻塞改组信号.当调用信号处理程序时,会在调用信号处理器之前,将该组信号中当前未处于进程掩码之列的任何信号自动添加到进程掩码中.这些信号将保留在进程掩码中,直到信号处理函数返回,届时将自动删除这些信号
+此外,引发对处理程序调用的信号将自动添加到进程掩码中,这意味着,当正在执行处理程序中,如果同一个信号实例第二次到达,信号处理程序将不会递归中断自己
+
+等待信号:pause()
+调用pause()将暂停进程的执行,直到信号处理函数中断改调用为止(或者直到一个未处理信号终止进程为止)
+#include <unistd.h>
+int pause(void)
+	Always returns -1 with errnor set to EINTR
+	
