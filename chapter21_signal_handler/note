@@ -1,0 +1,247 @@
+信号处理函数的两种常见设计
+1.信号处理函数设置全局性变量并退出。主进程对此标志进行周期性检查，一旦置位随即采取相应动作
+2.信号处理函数执行某种类型的清理动作，接着终止进程或者使用非本地跳转将栈解开并控制返回到主程序中的预定位置
+
+异步信号安全的函数
+_Exit(),_exit(),abort(),accept(),access(),aio_error(),aio_return(),aio_suspend(),alarm(),bind(),cfgetispeed(),cfgetospeed(),cfsetospeed()
+cfsetispeed(),chdir(),chmod(),chown(),clock_gettime(),close(),connect(),create(),dup(),dup2(),execle(),execve(),fchmod(),fchown,fcntl(),
+fdatasysnc(),fork(),fpathconf(),fstat(),fsync(),ftruncate(),getegid(),geteuid(),getgid(),getgroups,getpeername(),getpgrp(),getpid(),getppid()
+getsockname(),getsockopt(),getuid(),kill(),link(),listen(),lseek(),lstat(),mkdir(),mkfifo(),open(),pathconf(),pause(),pipe(),poll(),posix_trace_event(),
+pselect(),raise(),read(),readlink(),recv(),recvfrome(),recvmsg(),rename(),rmdir(),select(),sem_post(),send(),sendmsg(),sendto(),setgid(),
+setpgid(),setsid(),setsocketopt(),setuid(),shutdown(),sigaction(),sigaddset(),sigdelset(),sigemptyset(),sigfillset(),sigismember(),
+signal(),sigpause(),sigpending(),sigprocmask(),sigqueue(),sigset(),sigsuspend(),sleep(),socket(),sockatmark(),socketpair(),
+stat(),symlink(),sysconf(),tcdrain(),tcflow(),tcflush(),tcgetattr(),tcgetpgrp(),tcsendbreak(),tcsetattr(),tcsetpgrp(),time(),timer_getoverrun()
+timer_gettime(),timer_settime(),times(),umask(),uname(),unlink(),utime(),wait(),waitpid(),write()
+
+注意：
+	仅当信号处理函数中断了不安全函数的执行，且处理器函数自身也调用了这个不安全的函数时，该函数才是不安全的
+1.确保信号处理函数代码本身是可重入的，且只调用异步信号安全的函数
+2.当主程序执行不安全函数或是去操作信号处理器函数也可能更新的全局数据结构时，阻塞信号的传递
+
+信号处理器函数内部对errno的使用
+void  handler(int sig)
+{
+	int savedErrno;
+	savedErrno= errno;
+	/*/Now we can execute a function that might modify errno*
+	errno = savedErrno;
+}
+全局变量和sig_atomic_t 数据类型
+volatile sig_atomic_t flag;
+注意，c语言的递增，递减操作符并不再sig_atomic_t所提供的保障范围内
+
+从信号处理函数中终止的一些其他方法
+1.使用_exit()终止进程。注意不要使用exit()来终止信号处理函数，因为它不是信号安全函数
+2.使用kill()发送信号来杀死进程
+3.从信号处理函数中执行非本地跳转
+4.使用abort（）函数终止进程，并产生核心转储
+
+#include<setjmp.h>
+int sigsetjmp(sigjmp_buf env, int savesigs);
+	returns  0 on initial call, nonzero on return via siglongjmp()
+void  siglongjmp(sigjmp_buf env ,int val);
+
+异常终止进程abort()
+#include <stdlib.h>
+void abort();
+如果abort()成功终止了进程，那么还会刷新stdio流并将其关闭
+
+在备选栈中处理信号：sigaltstack()
+1.分配一块被称为“备选信号栈”的内存区域，作为信号处理函数的栈帧
+2.调用sigaltstack(),告之内核该备选信号栈的存在
+3.在创建信号处理函数时指定SA_ONSTACK标志，亦即通知内核的备选栈上处理器函数创建栈帧
+#include <signal.h>
+int sigaltstack(const stack_t *sigstack, stack_t *old_sigstack);
+	returns 0 on success, or -1 on error;
+
+typedef struct {
+               void  *ss_sp;     /* Base address of stack */
+               int    ss_flags;  /* Flags */
+               size_t ss_size;   /* Number of bytes in stack */
+           } stack_t;
+
+SS_ONSTACK
+	如果在获取已创建备选信号栈的当前信息时，该标志已然置位，就表明进程正在备选信号栈上执行。当进程已经在备选信号栈上运行时，试图调用sigaltstack()来创建一个新的备选信号栈会产生一个错误（EPERM）
+SS_DISABLE
+	在old_sigstack中返回，表示当前不存在已创建的备选信号栈，如果在sigstack中指定，则会禁用当前已创建的备选信号栈
+
+SA_SIGINFO标志
+如果在使用sigaction()创建处理器函数时设置了SA_SIGINFO标志，那么在收到信号时处理函数可以获取信号的一些附加信息，为获得这一信息，需要将处理器函数声明如下：
+void handler(int sig, siginfo_t *siginfo, void *ucontext);
+ struct sigaction {
+               void     (*sa_handler)(int);
+               void     (*sa_sigaction)(int, siginfo_t *, void *);
+               sigset_t   sa_mask;
+               int        sa_flags;
+               void     (*sa_restorer)(void);
+           };
+     
+siginfo_t {
+               int      si_signo;    /* Signal number */
+               int      si_errno;    /* An errno value */
+               int      si_code;     /* Signal code */
+               int      si_trapno;   /* Trap number that caused
+                                        hardware-generated signal
+                                        (unused on most architectures) */
+               pid_t    si_pid;      /* Sending process ID */
+               uid_t    si_uid;      /* Real user ID of sending process */
+               int      si_status;   /* Exit value or signal */
+               clock_t  si_utime;    /* User time consumed */
+               clock_t  si_stime;    /* System time consumed */
+               sigval_t si_value;    /* Signal value */
+               int      si_int;      /* POSIX.1b signal */
+               void    *si_ptr;      /* POSIX.1b signal */
+               int      si_overrun;  /* Timer overrun count; POSIX.1b timers */
+               int      si_timerid;  /* Timer ID; POSIX.1b timers */
+               void    *si_addr;     /* Memory location which caused fault */
+               long     si_band;     /* Band event (was int in
+                                        glibc 2.3.2 and earlier) */
+               int      si_fd;       /* File descriptor */
+               short    si_addr_lsb; /* Least significant bit of address
+                                        (since Linux 2.6.32) */
+           }
+  si_code;
+ si_code is a value (not a bit mask) indicating why this signal was sent.  The following list shows the values which can be placed in si_code for any signal, along with reason that  the  signal
+       was generated.
+
+           SI_USER        kill(2)
+
+           SI_KERNEL      Sent by the kernel.
+
+           SI_QUEUE       sigqueue(3)
+
+           SI_TIMER       POSIX timer expired
+
+           SI_MESGQ       POSIX message queue state changed (since Linux 2.6.6); see mq_notify(3)
+
+           SI_ASYNCIO     AIO completed
+
+           SI_SIGIO       Queued SIGIO (only in kernels up to Linux 2.2; from Linux 2.4 onward SIGIO/SIGPOLL fills in si_code as described below).
+
+           SI_TKILL       tkill(2) or tgkill(2) (since Linux 2.4.19)
+       The following values can be placed in si_code for a SIGILL signal:
+
+           ILL_ILLOPC     illegal opcode
+
+           ILL_ILLOPN     illegal operand
+
+           ILL_ILLADR     illegal addressing mode
+
+           ILL_ILLTRP     illegal trap
+
+           ILL_PRVOPC     privileged opcode
+
+           ILL_PRVREG     privileged register
+
+           ILL_COPROC     coprocessor error
+
+           ILL_BADSTK     internal stack error
+
+       The following values can be placed in si_code for a SIGFPE signal:
+
+           FPE_INTDIV     integer divide by zero
+
+           FPE_INTOVF     integer overflow
+
+           FPE_FLTDIV     floating-point divide by zero
+
+           FPE_FLTOVF     floating-point overflow
+
+           FPE_FLTUND     floating-point underflow
+
+           FPE_FLTRES     floating-point inexact result
+
+           FPE_FLTINV     floating-point invalid operation
+
+           FPE_FLTSUB     subscript out of range
+
+       The following values can be placed in si_code for a SIGSEGV signal:
+
+           SEGV_MAPERR    address not mapped to object
+
+           SEGV_ACCERR    invalid permissions for mapped object
+       The following values can be placed in si_code for a SIGBUS signal:
+
+           BUS_ADRALN     invalid address alignment
+
+           BUS_ADRERR     nonexistent physical address
+
+           BUS_OBJERR     object-specific hardware error
+
+           BUS_MCEERR_AR (since Linux 2.6.32)
+                          Hardware memory error consumed on a machine check; action required.
+
+           BUS_MCEERR_AO (since Linux 2.6.32)
+                          Hardware memory error detected in process but not consumed; action optional.
+
+       The following values can be placed in si_code for a SIGTRAP signal:
+
+           TRAP_BRKPT     process breakpoint
+
+           TRAP_TRACE     process trace trap
+
+           TRAP_BRANCH (since Linux 2.4)
+                          process taken branch trap
+
+           TRAP_HWBKPT (since Linux 2.4)
+                          hardware breakpoint/watchpoint
+
+       The following values can be placed in si_code for a SIGCHLD signal:
+
+           CLD_EXITED     child has exited
+
+           CLD_KILLED     child was killed
+
+           CLD_DUMPED     child terminated abnormally
+
+           CLD_TRAPPED    traced child has trapped
+
+           CLD_STOPPED    child has stopped
+
+           CLD_CONTINUED  stopped child has continued (since Linux 2.6.9)
+ 
+       The following values can be placed in si_code for a SIGIO/SIGPOLL signal:
+
+           POLL_IN        data input available
+
+           POLL_OUT       output buffers available
+
+           POLL_MSG       input message available
+
+           POLL_ERR       I/O error
+
+           POLL_PRI       high priority input available
+
+           POLL_HUP       device disconnected
+
+SA_SIGINFO的最后一个参数ucontext -> ucontext_t 
+	该结构提供了所谓的用户上下文信息，用于描述调用信号处理函数前的进程状态，其中包括上一个进程信号掩码以及寄存器的保存值，例如程序计数器（pc）和栈指针寄存器（sp）
+
+系统调用的中断和重启
+
+while((cnt= read(fd, buf, BUF_SIZE)) == -1 && errno == EINTR)
+	continue;
+if(cnt == -1)
+	errExit("read");
+===> 可以调整为
+#define NO_EINTR(stmt) while((stmt) == -1 && errno == EINTR) continue;
+NO_EINTR(cnt= read(fd, buf, BUF_SIZE));
+if(cnt == -1)
+	errExit("read");
+可以使用SA_RESTART来自动重启系统调用
+
+以下阻塞的系统调用绝不会自动重启（即使指定了SA_RESTART）
+poll(), ppoll(), select(), pselect)
+epoll_wait(), epoll_pwait()
+io_getevents()
+semop(),semtimedop(),msgrcv(),msgsnd()
+对inotify文件描述符发起的read()调用
+sleep(), nanosleep(), clock_nanosleep()
+pause(),sigsuspend(),sigtimedwait(), sigwaitinfo()
+
+
+为信号修改SA_RESTART标志
+#include <signal.h>
+int siginterrupt(int sig, int flag);
+	returns 0 on success, or -1 on error;
+	flag == 1 时，中断系统调用，如果flag == 0 时，则会重启系统调用
