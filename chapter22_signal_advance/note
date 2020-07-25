@@ -1,0 +1,134 @@
+核心转储文件
+ulimit -c unlimited
+
+linux中gdb attch一个进程 然后运行gcore就可以产生核心转储文件了
+不产生核心转储文件的情况
+1.进程对于核心转储文件没有写权限。造成这种情况的原因有进程对要创建核心转储文件所在目录可能没有写权限，或者是因为存在同名（且不可写，亦或非常规类型，例如，目录或符号链接）的文件
+2.存在一个同名，可写的普通文件，但指向该文件的（硬）链接数超过一个
+3.将要创建核心转储文件的所在目录并不存在
+4.把进程“核心转储文件大小”限制为0
+5.将进程“可创建文件的大小”设置为0
+6.对进程正在执行的而进程可执行文件没有读权限。
+7.以只读方式挂载当前工作目录所在的文件系统，或者文件系统空间已满，又或者i-node资源耗尽
+8，set-user-ID（set-group-ID）程序在由非文件属主（或属组）执行时，不会产生核心转储文件
+
+/proc/sys/fs/suid_dumpable
+/proc/PID/codedump_filter 可以对写入核心转储文件的内核映射类型施以进程级控制，分别对应4中类型的内存映射：私有匿名映射，私有文件映射，共享匿名映射以及共享文件映射
+文件默认值提供了传统的linux行为：
+	仅对私有匿名映射和共享匿名映射进行转储 ，可以查看core 手册
+
+为核心转储文件命名：/proc/sys/kernel/core_pattern
+如果以|开头的话，则会把剩余的字符当成命令，在生成核心转储文件时会执行这个命令，同时会把core输出的这个命令的标准输入中;以空格为分界，指明参数
+这些都可以通过man core查看说明
+
+SIGKILL信号的默认行为是终止进程，SIGSTOP信号的默认行为是停止一个信号，二者的默认行为是无法改变的
+
+SIGCONT和停止信号
+如果一个进程处于停止状态，那么一个SIGCONT信号的到来总是会促使其恢复运行，即使该进程正在阻塞或者忽略SIGCONT信号．
+	如果处于停止状态的进程正在阻塞SIGCONT信号，并且已经为SIGCONT信号建立了处理器函数，那么在进程恢复运行后，只有当取消了对SIGCONT的阻塞时，进程才会去调用相应的处理器函数
+
+如果有任一其他信号发送给了一个已经停止的进程，那么在进程收到SIGCONT信号，而恢复运行之前，信号实际上并未传递．ＳＩＧＫＩＬＬ信号则属于例外，因为该信号总是会杀死进程，即使进程目前处于停止状态
+每当进收到SIGCONT信号时，会将处于等待状态的停止信号丢弃．相反，如果任何停止信号传递给进程，那么进程将自动丢弃任何处于等待状态的SIGCONT信号．之所以采取这些步骤，意在防止之前发送的一个停止信号会在随后撤销SIGCONTA信号的行为，反之亦然
+
+可中断和不可中断的进程睡眠状态
+TASK_INTERRUPTIBLE:
+TASK_UNINTERRUPTIBLE:　ps STAT中显示Ｄ，比如等待磁盘IO的完成，这个状态是不可中断的
+
+硬件产生的信号，下列都是不合理的：
+１．从信号处理器中返回，又到了引发出问题的代码处，又触发了信号处理函数，导致无限循环
+2.忽略信号，linux会强制传递信号，即使程序已经请求忽略此类信号
+３．阻塞信号，会将阻塞信号的请求一一忽略，信号总是会传递给进程
+
+正确处理硬件产生的信号的方法有二：
+１．要么接受信号的默认行为（进程终止）
+２．要么为其编写不会正常返回的处理器函数．　调用_exit()终止进程，或者调用siglongjmp()
+
+信号传递的时机和顺序
+内核将等待信号传递给进程的时机是:该进程正在执行，且发生了有内核态到用户态的下一次切换时，实际上，这意味着在以下的时刻才会传递信号
+１．进程的前度超时后，再度获得调度时（即，在一个时间片的开始处）
+２．系统调用完成时（信号的传递可能引起正在阻塞的系统调用过早完成）
+
+当多个解除了阻塞的信号正在等待传递时，如果在信号处理器函数执行期间发生了内核态和用户态之间的切换，那么中断此处理器函数的执行，转而去调用第二个信号处理器函数（如此递归）．
+
+如果执意在现代glibc版本中使用不可靠信号语义，那么可以使用sysv_signal()
+#define _GNU_SOURCE
+#include <signal.h>
+void (*sysv_signal(int sig ,void (*handler)(int)))(int);
+	returns previous signal  disposition on success, or SIG_ERR on error;
+
+还应注意，使用signal()将信号处理设置为SIG_IGN或者SIG_DEF的手法具有良好的可移植性，所以也很常用
+
+实时信号
+１．实时信号的范围有所扩大
+２．对实时信号所采取的是队列化管理
+３．当发送一个实时信号时，可为信号指定伴随数据
+４．不通实时信号的传递顺序得到保障．信号值越小优先级越高
+实时信号采用的SIGRTMIN+x的形式，其定义不一定是整形，有可能是函数，所以需要在运行时才能确定其值
+
+发送实时信号
+#define _POSIX_SOURCE 199309
+#include <signal.h>
+int sigqueue(pid_t pid, int sig,  const union sigval value);
+	returns 0 on success, or -1 on error;
+union sigval {
+               int   sival_int;
+               void *sival_ptr;
+           };
+           
+使用掩码来等待信号:sigsuspend()
+#include <signal.h>
+int sigsuspend(const sigset_t *mask);
+	(Normally) returns -1 with errno set to EINTR
+调用sigsuspend(),相当于以不可中断方式执行如下操作
+sigprocmask(SIG_SETMASK, &mask, &preMask);
+pause();
+sigprocmask(SIG_SETMASK, *preMask, NULL);
+
+以同步方式等待信号
+#define _POSIX_C_SOURCE 199309
+#include <signal.h>
+int sigwaitinfo(const sigset_t *set, siginfo_t *info);
+	returns  number of dielivered signal on success, or -1 on error;
+sigwaitinfo()系统调用挂起进程的执行，直到set所指向信号集中的某一信号抵达．如果调用sigwaitinfo()时，set中的某一信号已经处于等待状态，那么sigwaitinfo()将立即返回，传递来的信号就此从进程的等待信号队列中一处，并且将返回信号编号作为函数结果
+不对标准信号进行排队处理，对实时信号进行排队处理，并且对实时信号的传递遵循低编号优先的原则
+应该先对信号阻塞后，然后再调用sigwaitinfo()
+
+
+sigtimedwait()系统调用是sigwaitinfo()调用的变体．唯一区别是sigtimedwait()允许指定等待时间
+#define _POSIX_C_SOURCE 199309
+#include <signal.h>
+int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *timeout)
+	returns number of delivered signal on success, or -1 on error or  timeout(EAGAIN)
+
+通过文件描述符来获取信号
+#include <sys/signalfd.h>
+int signalfd(int fd, const sigset_t *mask, int flag);
+	returns  file descriptor on success, or -1 on error;
+
+如果fd == -1那么signalfd()会创建一个新的文件描述符，用于读取mask中的信号，否则，将修改与fd相关的mask值，且该fd一定是由之前的signalfd()的一次调用创建而成
+flag支持一下两个标志
+SFD_CLOEXEC
+SFD_NONBLOCK
+struct signalfd_siginfo {
+               uint32_t ssi_signo;   /* Signal number */
+               int32_t  ssi_errno;   /* Error number (unused) */
+               int32_t  ssi_code;    /* Signal code */
+               uint32_t ssi_pid;     /* PID of sender */
+               uint32_t ssi_uid;     /* Real UID of sender */
+               int32_t  ssi_fd;      /* File descriptor (SIGIO) */
+               uint32_t ssi_tid;     /* Kernel timer ID (POSIX timers)
+               uint32_t ssi_band;    /* Band event (SIGIO) */
+               uint32_t ssi_overrun; /* POSIX timer overrun count */
+               uint32_t ssi_trapno;  /* Trap number that caused signal */
+               int32_t  ssi_status;  /* Exit status or signal (SIGCHLD) */
+               int32_t  ssi_int;     /* Integer sent by sigqueue(3) */
+               uint64_t ssi_ptr;     /* Pointer sent by sigqueue(3) */
+               uint64_t ssi_utime;   /* User CPU time consumed (SIGCHLD) */
+               uint64_t ssi_stime;   /* System CPU time consumed (SIGCHLD) */
+               uint64_t ssi_addr;    /* Address that generated signal
+                                        (for hardware-generated signals) */
+               uint8_t  pad[X];      /* Pad size to 128 bytes (allow for
+                                         additional fields in the future) */
+           };
+
+
