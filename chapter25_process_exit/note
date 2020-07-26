@@ -1,0 +1,88 @@
+#include <unistd.h>
+void _exit(int status)
+_exit()的status参数定义了进程的终止状态，父进程可以调用wait()以获取该状态。虽然定义了Int类型，但是只有低8位可为父进程采用
+调用_exit()的程序总是会成功终止（即，_exit()重不返回）
+虽然可将0~255之间的任意值复制给_exit()的status参数，不过如取值大于128将在shell脚本中引发混乱。原因在于，当以信号（signal）终止一个命令时，shell会将变量$?置为128和信号值之和，以表征这一事实。
+
+程序一般不会直接调用_exit(),而是调用库函数exit()，它会在调用_exit()前执行各种动作
+#include <stdlib.h>
+void exit(int status);
+exit()会执行的动作如下：
+1.调用退出处理函数（通过atexit()和on_exit()注册的函数），其执行顺序与注册循序相反
+2.刷新stdio流缓冲区
+3.使用status提供的值执行_exit()系统调用
+
+程序的另一种终止方法是从main()函数中返回(return),或者或明或暗地执行到main()函数的结尾处。执行return n 等同于执行exit(n)的调用，因为调用main()的运行时函数会将main()的返回值作为exit()的参数
+
+存在一种情况，从main()函数中返回与调用exit()并不相同。如果在退出的处理过程中所执行的任何步骤需要访问main()函数的本地变量，那么从main()函数中返回会导致未定义的行为。
+例如，在调用setvbuf或setbuff()时调用了main()函数的本地变量，就会发生这种情况
+
+执行未定义返回值的return,或是无声无息地执行到main()函数结尾，同样会导致main()的调用者执行exit()函数，不过视所支持的不同c语言标准版本，以及所使用的不同编译选项，其结果也有所不同
+1.c89标准未就上述情况下的行为进行定义，诚意可以返回任意的status值.linux gcc 的 默认行为就是如此，程序退出状态是取之于栈或特定cpu寄存器的随即值。
+2.c99标准则要求，执行至main函数结尾处的情况应等同于调用exit(0).如果使用gcc -std=c99 在linux中编译程序，将会得到这种效果
+
+进程终止的细节
+无论进程是否正常终止，都会发生如下动作
+1.关闭所有打开的文件描述符，目录流，信息目录描述符，以及（字符集）转换描述符
+2.作为文件描述符关闭的后果之一，将释放该进程所持有的任何文件锁
+3.分离任何已链接的system V 共享内存，且对应于各段的shm_nattch计数将减一
+4.进程为每个System V信号量所设置的semadj值将会被加到信号量值中
+5.如果该进程是一个管理终端的管理进程，那么系统会想该终端前台继承组中的每个进程发送SIGHUP信号，接着终端会与会话脱离
+6.将关闭该进程打开的任何POSIX有名信号量，类似于调用sem_close()
+7.将关闭该进程打开的任何POSIX消息队列，类似于调用mq_close()
+8.作为进程退出的后果之一，如果某进程组成为孤儿，且该组中存在任何已停止进程，则组中所有的进程都将收到SIGHUP信号，随之SIGCONT信号将会送达
+9.移除该进程通过mlock()或mlockall()所建立的任何内存锁
+10.取消该进程调用mmap()所创建的任何内存映射
+
+如果程序直接调用_exit()或因信号而异常终止，则不会调用退出处理函数
+#include <stdlib.h>
+int atexit(void (*func)(void));
+	returns  0 on success,  or nonzero on error;
+
+可以注册多个退出处理程序（设置可以将同一函数注册多次）。当应用程序调用exit()时，这些函数的执行顺序与注册时相反
+一旦有任一退出处理程序无法返回--无论因为调用_exit()还是进程因为收到信号终止（例如，退出处理程序调用raise()）,那么就不会再调用剩余的处理程序，此外，调用_exit()时通常需要执行的剩余动作将不再执行
+
+SUSv3规定，若退出处理程序自身调用exit()，其结果未定义。在linux中，会照例调用剩余的退出处理程序。不过，在某些系统上，这将导致对所有退出程序的再次调用，并应发无限循环调用（知道栈溢出将进程杀死）
+通过fork()创建的子进程会继承父进程注册的退出处理函数。而进程调用exec（）时将溢出所有已注册退出处理程序
+
+使用atexit()注册的退出处理函数有两个限制：
+1.退出处理程序在执行时无法知道传递给exit()状态
+2.无法给退出程序指定参数
+为了摆脱这些限制，glibc提供了一个（非标准的）替代方法，on_exit()
+#define _BSD_SOURCE 
+#include <stdlib.h>
+int on_exit(void (*func)(int , void *), void *arg);
+	returns 0 on success, or nonzero on error;
+
+有如下的情况
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+int main()
+{
+		printf("hello world\n");
+		write(STDOUT_FILENO, "Ciao\n", 5);
+		if(fork() == -1)
+		{
+				printf("fork fail\n");
+				return -1;
+		}
+		exit(EXIT_SUCCESS); 	 	
+}
+情况一：
+./a.out 
+hello world
+Ciao
+情况二:
+./a.out  > a
+cat a
+Ciao
+hello world
+hello world
+输出结果不一样
+避免上述情况的，可以如下
+1.作为针对stdio缓冲区问题的特定解决办法，可以在调用fork()之前使用函数fflush()来刷新stdio缓冲区。作为另一个选择，也可以使用setvbuf()和setbuf()来关闭stdio流的缓冲功能
+2.子级进程可以调用_exit()而非exit()，以便不再刷新stdio缓冲区。这一技术证实了一个更为通用的原则：在创建子进程的应用中，典型情况下仅有一个进程（一般为父进程）调用exit()终止
+而其他进程应该调用_exit()来终止
+
+
