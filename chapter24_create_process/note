@@ -1,0 +1,29 @@
+1.系统调用允许一个进程（父进程）创建一个新进程（子进程）。子进程获得父进程的栈，数据段，堆，和执行文本段的拷贝
+2.库函数exit()位于系统调用_exit()之上。父子进程一般只有一个会通过exit()退出，而另一个进程应使用_exit()终止
+3.系统调用wait(&status)的目的有二：
+	a.如果子进程尚未调用exit()终止，那么wait()会挂起父进程直到子进程终止；
+	b.子进程的终止状态通过wait()的status参数返回
+4.系统调用execve(pathname, argv, envp)加载一个新程序。他将丢弃现有的程序文本段，并为新程序重新创建栈，数据段以及堆
+#include <unistd.h>
+pid_t fork()
+	in parent : returns process ID of child on success, or -1 on error; in successfully created child : always returns  0
+理解fork（）的诀窍是，意识到，完成对其调用后将存在两个进程，且每个进程都会从fork()的返回处继续执行
+这两个进程将执行相同的程序文本段，但却各自拥有不同的栈，数据，堆段拷贝。
+子进程的栈，数据以及栈段开始时是对父进程内存相应部分的完全复制。执行fork()之后，每个进程均可修改各自的栈数据，以及堆段中的变量，而并不影响另一个进程
+
+现代，子进程不是把父进程的内存原滋原味的拷贝进程它的内存空间，采用如下两种技术规避原样拷贝的浪费
+1.内核（kernel）将每一进程的代码段标记为只读，从而使进程无法修改自身代码。这样，父，子进程可共享同一代码段。系统调用fork()在子进程创建代码段时，其构建的一系列进程页表项均指向父进程相同的物理内存页帧
+2.对于父进程数据段，堆段和栈段中的各页，内核采用写时复制（copy-on-write）技术来处理，最初，内核做了一些设置，令这些段的页表项指向与父进程相同的物理内存页，并将这些
+  页面自身标记为只读。调用fork()之后内核会捕获所有父进程和子进程针对这些页面的修改企图，并将要修改的（about-to-be-modified）页面创建拷贝。系统将新的页面拷贝分配给
+  遭到内核捕获的进程，还会对子进程的相应页表项做适当的调整。从这一刻起，父，子进程可以分别修改各自的页拷贝，不再互相影响
+  
+系统调用vfork()
+#include <unistd.h>
+pid_t vfork();
+	in parent: returns process ID of child on success, or -1 on error;
+	in successfully created child:always returns 0
+1.无需为子进程复制虚拟内存页或页表。相反，子进程共享父进程的内存，直至其成功执行了exec()或是调用_exit()退出
+2.在子进程调用exec()或_exit()之前，将暂停执行父进程
+在使用时，一般立即在vfork()之后调用exec().如果exec()执行失败，子进程应立即调用_exit()退出（vfork()产生的子进程不应调用exit()退出，应为这回导致对父进程stdio缓冲区的刷新和关闭）
+
+linux专有文件/proc/sys/kernel/sched_child_runs_first设为非0值可以改变该默认设置
