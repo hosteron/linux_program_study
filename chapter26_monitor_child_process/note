@@ -1,0 +1,123 @@
+系统调用wait()等待调用进程的任一进程终止，同时在参数status所指向的缓冲区中返回该子进程的终止状态
+#include <sys/wait.h>
+pid_t wait(int *status)
+	returns process ID of terminated child , or -1 on error
+系统调用wait()执行如下动作
+1.如果调用进程并无之前未被等待的子进程终止，调用将一直阻塞，直至某个子进程终止，如果调用时已有子进程终止，wait()则立即返回
+2.如果status非空，那么关于子进程如何终止的信息则会通过status指向的整数型变量返回．
+3.内核将会为父进程下所有子进程的运行总量追加到进程ＣＰＵ时间以及资源使用数据
+4.将终止进程的ＩＤ作为wait()的结果返回
+
+系统调用waitpid()
+系统调用wait()存在诸多限制，而设计waitpid()则意在突破这些限制
+1.如果父进程已经创建了多个子进程，使用wait()将无法等待某个特定的子进程的完成，只能按照顺序等待下一个子进程的终止
+2.如果没有子进程退出，wait()总是保持阻塞．有时候会希望执行非阻塞等待，是否有子进程退出，立判可知
+3.使用wait()只能发现哪些已经终止的子进程．对于子进程因某个信号（如SIGSTOP或SIGTTIN）而停止，或是已停止子进程收到SIGCONT信号后恢复执行的情况就无能为力了
+
+#incldue <sys/wait.h>
+pid_t waitpid(pid_t pid, int *status, int option);
+	returns process ID of child, or -1 on error;
+1.如果pid大于０，表示等待进程ＩＤ为ｐｉｄ的子进程
+2.如果pid等于０，则等待与调用进程（父进程）同一个进程组的所有子进程
+3.如果pid小于－１，则会等待进程组标识与pid绝对值相等的所有子进程
+4.如果pid等于-1，则等待任意子进程，wait(&status)的调用与waitpid(-1, &status, 0)等价
+参数options是一个位掩码，可以包含（按位或操作）０个或多个如下标志
+WUNTRACED
+	除了返回终止子进程的信息外，还返回因信号而停止的子进程信息
+WCONTINUED
+	返回那些因收到SIGCONT信号而恢复执行的已停止子进程的状态信息
+WNOHANG
+	如果参数pid所指定的子进程未发生状态变化，则立即返回，而不会阻塞，亦即poll(轮询)．在这种情况下，waitpid()返回０．如果调用进程并无与pid匹配的子进程，则waitpid()报错，将错误置成ECHILD
+
+由wait()和waitpid()返回的status值，可以用来区分以下子进程事件
+1.子进程调用_exit()（或exit()）而终止，并指定了一个整型值作为退出状态
+2.子进程收到未处理信号而终止
+3.子进程因为信号而停止，并以WUNTRACED标志调用waitpid()
+4.子进程因收到信号SIGCONT而恢复，并以WCONTINUED标志调用waitpid()
+
+虽然将变量status定义为整型（int）,单实际上仅使用了其最低的２个字节
+格式如下：
+				１５　　　　　－　　　　８　７　　　　　　　　　　　０
+正常终止：			退出状态0-255				0
+为信号所杀：			未用				　　　		终止信号（！＝０）　第７位表示内核转储（core dumped）标志
+为信号停止：			终止信号					0x7F
+通过信号恢复执行：		0xFFFF
+以下列表中各宏只有一个会返回真
+WIFEXITED(status)
+	若子进程正常结束则返回真（true）.此时，宏WEXITSTATUS(status)返回子进程的退出状态
+WIFSIGNALED(status)
+	若通过信号杀掉子进程则返回true,此时，宏WTERMSIG(status)返回导致子进程终止的信号编号．若子进程产生内核转储文件，则宏WCOREDUMP(status)返回值为true
+WIFSTOPPED(status)
+	若子进程因信号而停止，则此宏返回值为true．此时，WSTOPSIG(status)返回导致子进程停止的信号编号
+WIFCONTINUED(status)
+	若子进程收到SIGCONT信号而恢复执行，则此宏返回ｔｒｕｅ
+
+从信号处理程序中终止进程
+如果在信号处理程序中调用_exit(EXIT_SUCCESS),父进程会认为子进程是正常终止
+如果需要通知父进程自己因某个信号而终止，那么子进程的信号处理程序应首先将自身废除，然后再次发送相同信号，该信号这次将终止这一子进程．信号处理程序需要包含如下代码
+void handler(int sig)
+{
+	//perform cleanup steps
+	signal(sig, SIG_DFL);
+	raise(sig);
+}
+#include <sys/wait.h>
+int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options);
+	returns 0 on success or if WNOHANG was specified and there were no children to wait for , or -1 on error
+参数idtype和ｉｄ指定需要等待哪些子进程，如下所示：
+1.如果idtype为P_ALL,则等待任何子进程，忽略id
+2.如果idtype为P_PID，则等待进程ＩＤ为id的子进程
+3.如果idtype为P_PGID,则等待进程组ID为id各进程的所有子进程
+注意：
+	与waitpid()不同，不能靠指定id为０来表示与调用者同属于同一进程组的所有进程．相反以getpgrp()的返回值来显式的指定进程组id
+
+options中指定一个或多个如下标识（按位或运算）来实现这种控制
+WEXITED
+	等待已终止的子进程，而无论是否是正常返回
+WSTOPPED
+	等待已通过信号而停止的子进程
+WCONTINUED	
+	等待经由信号SIGCONT而恢复的子进程
+  一下附加标识也可以通过按位或运算加入options中
+WNOHANG
+	与其在waitpid()中的意义相同．
+WNOWAIT
+	通常，一旦通过waitid()来等待子进程，那么必然会去处理所谓　＂状态事件＂，如果指定了ＷNOWAIT,则会返回子进程状态，但子进程亦然处于可等待的状态
+可以通过man waitid手册查看waitid的siginfo_t 的数据含义
+
+如果在options中指定了WNOHANG，　其返回的值为０，有两个含义，１．有等待的子进程终止，２．无子进程终止
+区别它们的可移植方式如下
+siginfo_t info;
+memset(&info, 0, sizeof(info)); // 先清空
+if(waitid(idtype, id, &info, options | WNOHANG) == -1)
+	ERR
+if(info.si_pid == 0)
+	no children changed state
+else
+	a child changed state; details are provided in 'info'
+
+wait3, wait4系统调用，请用man 手册查看其含义，和waitpid主要区别在于，他在struct rusage结构中返回了进程使用的cpu时间总量以及内存管理的统计数据
+孤儿进程和僵尸进程
+使用参数PR_SET_PDEATHSIG调用linux特有的系统调用prctl()，将有可能导致某一进程在成为孤儿时收到特定信号
+这里无非是父进程先退出，还是子进程先退出
+父进程先退出，子进程将变成孤儿进程，被init进程回收
+子进程先退出，父进程还存在，那么在父进程调用wait()之前，子进程成为僵尸进程，其会保留一小部分资源，包括：子进程ＩＤ，终止状态，资源使用情况等信息
+
+SIGCHLD信号
+父进程应使用wait()或类似调用来防止僵尸进程的累积，以及采用如下两种方法避免这一问题
+１．父进程调用不带WNOHANG标志的wait()，或者waitpid()方法，此时如果尚无已停终止的子进程，那么调用将会阻塞
+2.父进程周期性地调用带有WNOHANG标志的waitpid()，执行针对已终止子进程的非阻塞式检查
+
+为SIGCHLD建立信号处理程序
+无论一个子进程何时终止，系统都会向其父进程发送SIGCHLD信号．对该信号的默认处理是忽略
+通常SIGCHLD处理程序都简单地由以下代码组成，仅仅捕获已终止子进程而不管其退出状态
+while(waitpid(-1, NULL, WNOHANG) > 0)
+	continue;
+
+向已停止的子进程发送SIGCHLD信号
+	正如可以使用waitpid()来检测已停止的子进程一样，当信号导致子进程停止时，父进程也有可能收到SIGCHLD信号．调用sigaction()设置SIGCHLD信号处理程序时，如传入SA_NOCLDSTOP标志即可控制这一行为．若未使用该标志，系统在子进程停止时向父进程发送SIGCHLD信号，如果指定了此标志，则不会发送
+	SUSv3也允许，当信号SIGCONT信号导致已停止的子进程恢复执行时，向其父进程发送SIGCHLD信号
+
+忽略终止的子进程
+	将对SIGCHLD的处理显式的设置为SIG_IGN，这样，系统从而会将其后终止的子进程立即，此子进程不会成为僵尸进程．这时，将子进程的状态弃之不问
+	但是对于显式设置SIG_IGN之前终止的子进程（还是僵尸进程），wait()还是会生效的，不同平台对此的处理还不一样，比如solaris 8会将之前所有的僵尸进程删除，但是Ｌｉｎｕｘ平台会保留之前的僵尸进程
