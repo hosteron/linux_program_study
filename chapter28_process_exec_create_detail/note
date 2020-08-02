@@ -1,0 +1,67 @@
+linux系统的进程记账功能属于可选内核组件，可以通过CONFIG_BSG_PROCESS_ACCT选项进行配置
+特权进程可利用系统调用acct()来打开和关闭进程记账功能．应用程序很少使用这一系统调用．一般会将相应命令置于系统启动脚本中，在系统每次重启时开启进程记账功能
+#define _BSD_SOURCE
+#include <unistd.h>
+int acct(const char *filename);
+	returns 0 on success, or -1 on error;
+记账文件通常的的路径名是/var/log/pacct或/usr/account/pacct.若想关闭进程记账功能，则指定filename为空即可
+一旦打开进程记账功能，每当一进程终止时，就会有一条acct记录协议记账文件．acct结构定义在头文件<sys/acct.h>中，具体如下：
+ #define ACCT_COMM 16
+
+           typedef u_int16_t comp_t;
+
+           struct acct {
+               char ac_flag;           /* Accounting flags */
+               u_int16_t ac_uid;       /* Accounting user ID */
+               u_int16_t ac_gid;       /* Accounting group ID */
+               u_int16_t ac_tty;       /* Controlling terminal */
+               u_int32_t ac_btime;     /* Process creation time
+                                          (seconds since the Epoch) */
+               comp_t    ac_utime;     /* User CPU time */
+               comp_t    ac_stime;     /* System CPU time */
+               comp_t    ac_etime;     /* Elapsed time */
+               comp_t    ac_mem;       /* Average memory usage (kB) */
+               comp_t    ac_io;        /* Characters transferred (unused) */
+               comp_t    ac_rw;        /* Blocks read or written (unused) */
+               comp_t    ac_minflt;    /* Minor page faults */
+               comp_t    ac_majflt;    /* Major page faults */
+               comp_t    ac_swaps;     /* Number of swaps (unused) */
+               u_int32_t ac_exitcode;  /* Process termination status
+                                          (see wait(2)) */
+               char      ac_comm[ACCT_COMM+1];
+                                       /* Command name (basename of last
+                                          executed command; null-terminated) */
+               char      ac_pad[X];    /* padding bytes */
+           };
+
+           enum {          /* Bits that may be set in ac_flag field */
+               AFORK = 0x01,           /* Has executed fork, but no exec */
+               ASU   = 0x02,           /* Used superuser privileges */
+               ACORE = 0x08,           /* Dumped core */
+               AXSIG = 0x10            /* Killed by a signal */
+           };
+系统调用clone()
+类似于fork()和vfork()，linux特有的系统调用clone()也能创建一个新进程．与前两者不同的是，后者在进程创建期间对步骤的控制更为精确．clone()主要用于线程库的实现．由于clone()有损于程序的可移植性
+，故而应避免在应用程序中直接使用
+#define _GNU_SOURCE
+#include <sched.h>
+int clone(int (*func)(void *), void *child_stack, int flags, void *func_arg,.../*pid_t *ptid, struct user_desc *tls, pid_t *ctid*/);
+	returns process ID of child on success,  or -1 on error;
+如同fork()，由clone()创建的新进程几近于父进程的翻版
+但与fork()不同的是，克隆生成的子进程继续运行时不以调用处为起点，转而去调用参数func所指定的函数，func又称为子函数．调用子函数时的参数由func_arg指定．经过适当转换后，子函数可以对该参数的含义自由解读
+例如，可以作为整型值，也可是做指向结构的指针，（之所以可以作为指针处理，是因为可能产生的子进程对调用进程的内存既可以获取，也可以共享）
+
+对于内核而言,fork(),vfork(),clone()最终都是由同一函数实现（kernel/fork.c中的do_fork()）;
+
+当函数func返回（此时其返回值即为进程的退出状态）或是调用exit（）,_exit()之后，克隆产生的子进程就会终止．照例，父进程可以通过wait()一类函数来等待克隆子进程
+因为克隆产生的子进程可能（类似vfork()）共享父进程的内存，所以它不能使用父进程的栈，相反，调用者必须分配一块大小适中的内存空间供子进程使用，同时将这块内存的指针置于参数child_stack中，
+在大多是硬件架构中，栈空间的增长方向是向下的，所以参数child_stack应当指向所分配内存块的高端
+
+参数flags服务于双重目的．首先，其低字节中存放着子进程的终止信号，子进程退出时其父进程将收到这一信号．（如果克隆产生的子进程因信号而终止，父进程亦然会收到SIGCHLD）改字段也可能是０，这时将不会产生任何信号
+
+对于fork()和vfork()而言，就无从选择终止信号，只能是SIGCHLD
+参数flags的剩余字节则存放了位掩码，用于控制clone()的操作
+参数的含义看man clone,或者书中描述
+内核调度实体ＫＳＥ(kernel scheduling entity),实际上，线程和进程都是ＫＳＥ，只是与其他ＫＳＥ之间对属性（虚拟内存，打开文件描述符，对信号的处置，进程ＩＤ等）的共享程度不同．
+	针对线程间属性共享的方案不少，POSIX线程规范只是其中之一
+	在新的内核2.6.16之后开始，linux提供了新的系统调用unshare()，由clone, fork(), vfork()创建的子进程利用该调用可以撤销对某些属性的共享
