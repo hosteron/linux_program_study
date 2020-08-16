@@ -1,0 +1,35 @@
+#include <pthread.h>
+int pthread_cancel(pthread_t thread);
+	returns 0 on success, or a positive error number on error;
+发出取消请求后,函数pthread_cancel()当即返回,不会等待目标线程的退出
+也就是说,目标线程会发生什么,何时发生,这些都取决于线程的取消状态和类型
+
+#include <pthread.h>
+int pthread_setcancelstate(int state, int *oldstate);
+int pthread_setcanceltype(int type, int *oldtype);
+	returns 0 on success, or a positive error number on error;
+PTHREAD_CANCEL_DISABLE
+	线程不可取消.如果此类线程收到取消请求,则会将请求挂起,直到将线程的取消状态置为启用
+PTHREAD_CANCEL_ENABLE
+	线程可以取消.默认值
+类型
+PTHREAD_CANCEL_ASYNCHRONOUS
+	可能会在任何时点取消线程
+PTHREAD_CANCEL_DEFERED
+	取消请求保持挂起,知道到达取消点
+当某线程执行了fork(),子进程继承了线程的取消状态和类型;而当某线程调用了exec(),会将新程序主线程的取消类型以及状态重新设置为PTHREAD_CANCEL_ENABLE,PTHREAD_CANCEL_DEFERRED
+
+线程一旦收到取消请求,且启用了取消性状态并将类型设置为延迟,则其会在下次抵达取消点时终止.如果该线程未分离,那么为了防止其变为僵尸线程,必须由其他线程对其进行连接,连接之后,返回到函数pthread_join()的
+	第二个参数的将是一个特殊值:PTHREAD_CANCELED
+产生一个取消点
+#include <pthread.h>
+void pthread_testcancel(void);
+清理函数
+每个线程都可以拥有一个清理函数栈.当线程遭取消时,会沿改栈自顶往下依次执行清理函数,首先会执行最近设置的函数,接着是次新的函数,以此类推,当执行完所有清理函数后,线程终止
+函数pthread_cleanup_push()和pthread_cleanup_pop()分别负责向调用线程的清理函数栈添加和一处清理函数
+#include <pthread.h>
+void pthread_cleanup_push(void (*routine)(void *), void *arg);
+void pthread_cleanup_pop(int execute);   // 如果execute为非0 ,则会在移除清理函数之前,执行一次
+这两个函数其实是宏.必须在同一个 作用域中
+
+
