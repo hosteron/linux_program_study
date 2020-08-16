@@ -1,0 +1,45 @@
+一次性初始化
+#include <pthread.h>
+int pthread_once(pthread_once_t *once_control, void (*init)(void));
+	returns 0 on success, or a positive error number on error
+利用once_control的状态,函数pthread_once()可以确保无论有多少线程对pthread_once()调用了多少次,也只会执行一次由Init指向的调用者定义的函数
+另外,参数once_control必须是一个指针,指向初始化为PTHREAD_ONCE_INIT的静态变量
+pthread_once_t once_var = PTHREAD_ONCE_INIT;
+通常将pthread_once()和线程特有数据结合使用
+
+使用线程特有数据技术,可以无需修改函数接口而实现已有函数的线程安全
+线程特有数据API概述
+要使用线程特有数据,库函数执行的一般步骤如下
+1.函数创建一个键(key),用以将不同函数使用的线程特有数据区别开来.调用函数pthread_key_create()可创建此键,且只需在首个调用该函数的线程创建一次,pthread_once()的使用正是出于这一目的,键在创建时,并未分配任何线程特有数据
+2.调用pthread_key_create()还有另一个目的,即允许调用者指定一个自定义函数,用于释放为该键所分配的各个存储块.当使用线程特有数据的线程终止时,pthread API会自动调用此解构函数,同时将改线程特有数据的指针作为参数传入
+3.函数会为每个调用者线程创建线程特有数据块.这一分配通过调用malloc()(或类似函数)完成.每个线程只分配一次.且会在线程初次调用此函数时分配
+4.为了保存上一步所分配存储块的地址,函数会使用两个pthread函数pthread_setspecific ()和pthread_getspecific();调用pthread_setspecific()实际上是对pthreads实现发起这样的请求:保存该指针,并记录与特定键以及特定线程的关联性
+
+因为进程中所有线程都可使用返回的键,所有参数key应指向一个全局变量
+#include <pthread.h>
+int pthread_key_create(pthread_key_t *key, void (*destructor)(void *));
+	returns 0 on success, or a positive number on error;
+只要线程终止时与key的关联值不为NULL,pthread API会自动执行解构函数
+
+
+观察线程特有数据的实现有助于理解他们的使用方法.典型的实现(NPTL即在此列)会包含一下数组
+1.一个全局(进程范围)数组 ,存放线程特有数据的键信息
+pthread_key[0] 在用标志
+				解构函数指针
+pthread_key[1] 在用标志
+				解构函数指针
+   .....
+2.每个线程包含一个数组,存有为每个线程分配的线程特有数据块的指针(通过调用pthread_setspecific()来存储指针)
+#include <pthread.h>
+int pthread_setspecific(pthread_key_t key, const void *value);
+	returns 0 on success, or a positive error number on error
+void *pthread_getspecific(pthrea_key_t key);
+	returns pointer, or NULL if on thread_specific data isasociated with key
+
+线程局部存储
+线程局部存储的主要优点在于,比线程特有数据使用要简单.要创建线程局部变量,只要简单的在全局或静态变量的声明中包含__thread说明符就行了
+static __thread char buf[128];
+但凡带有这种说明符的变量,每个线程都拥有一份对变量的拷贝.线程局部存储中的变量将一直存在,直到线程终止,届时会自动释放这一存储
+1.如果变量声明中使用了关键字static 或extern,那么关键字__thread 必须紧跟其后
+2.与一般的全局或静态变量一样,线程局部存储在声明时可以设置一个初始值
+3.可以使用c语言取值操作符来获取线程局部变量的地址
