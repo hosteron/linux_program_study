@@ -1,0 +1,124 @@
+一旦线程锁定了互斥量,随机成为该互斥量的所有者,只有所有者才能给互斥量解锁
+一般情况下,对每一个共享资源(可能由多个相关变量组成)会使用不通的互斥量,每一线程在访问统一资源时采用如下协议
+1.针对共享资源锁定互斥量
+2.访问共享资源
+3.对互斥量解锁
+
+静态分配的互斥量
+pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER
+对某一互斥量的副本(copy)执行pthread操作将导致未定义的结果
+初始化后,互斥量处于未锁定的状态
+#include <pthread.h>
+int pthread_mutex_lock(pthread_mutex_t *mutex);
+int pthread_mutex_unlock(pthread_mutex_t *mutex);
+	Both return 0 on success, or a positive error number on error
+
+函数pthread_mutex_unlock()将解锁之前已遭到线程锁定的互斥量.以下行为均属错误:
+	1.对处于未锁定状态的互斥量解锁
+	2.解锁由其他线程锁定的互斥量
+如果有不止一个线程在等待获取由函数pthread_mutext_unlock()解锁的互斥量,则无法判断究竟哪个线程将如愿以偿
+pthread_mutex_trylock和pthread_mutex_timedlock
+若某一线程使用pthread_mutex_trylock()周期性地轮训是否可以对互斥量加锁,则有可能要承担这样的风险
+	当队列中的其他线程通过调用pthread_mutex_lock()相继获得对互斥量的访问时,改线程将始终与此互斥量无缘
+
+互斥量的实现采用了机器语言级的原子操作(在内存中执行,对所有线程可见),只有发生锁的争用时才会执行系统调用
+linux中,互斥量的实现采用了futex
+#include <pthread.h>
+int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr);
+	returns 0 on success, or a positive error number on error
+初始化一个已经初始化过的互斥量将导致未定义的行为
+如下情况下,必须使用函数pthread_mutex_int(),而非静态初始化互斥量
+1.动态分配位于堆的互斥量,例如,动态创建指针对某一结构的链表,表中每个结构都包含一个pthread_mutex_t 类型的字段来存放互斥量,借以保护改结构体的访问
+2.互斥量是在栈中分配的自动变量
+3.初始化经由静态分配,且不使用默认属性的互斥量
+当不再需要经由自动或动态分配的互斥量时,应使用pthread_mutex_desctroy()将其销毁.对于使用PTHREAD_MUTEX_INITIALIZER静态初始化的互斥量,则不需要使用pthread_mutex_destroy()销毁
+#include <pthread.h>
+int pthread_mutex_destroy(pthread_mutex_t *mutex);
+	returns 0 on success,  or a positive error number on error;
+ ┌───────────┬────────────┬────────────────┬───────────────────────┐
+ │Mutex Type │ Robustness │     Relock     │ Unlock When Not Owner │
+ ├───────────┼────────────┼────────────────┼───────────────────────┤
+ │NORMAL     │ non-robust │ deadlock       │ undefined behavior    │
+ ├───────────┼────────────┼────────────────┼───────────────────────┤
+ │NORMAL     │ robust     │ deadlock       │ error returned        │
+ ├───────────┼────────────┼────────────────┼───────────────────────┤
+ │ERRORCHECK │ either     │ error returned │ error returned        │
+ ├───────────┼────────────┼────────────────┼───────────────────────┤
+ │RECURSIVE  │ either     │ recursive      │ error returned        │
+ │           │            │ (see below)    │                       │
+ ├───────────┼────────────┼────────────────┼───────────────────────┤
+ │DEFAULT    │ non-robust │ undefined      │ undefined behavior†   │
+ │           │            │ behavior†      │                       │
+ ├───────────┼────────────┼────────────────┼───────────────────────┤
+ │DEFAULT    │ robust     │ undefined      │ error returned        │
+ │           │            │ behavior†      │                       │
+ └───────────┴────────────┴────────────────┴───────────────────────┘
+
+
+PTHREAD_MUTEX_NORMAL 
+	该类型的互斥量不具有死锁检测功能.如线程试图对自己锁定的互斥量加锁,则发生死锁,互斥量处于未锁定状态,或者已由其他线程锁定,对其解锁会导致不确定的结果(linux上,对这类互斥锁的上述操作都会成功)
+PTHREAD_MUTEX_ERRORCHECK 
+	对此类互斥量的所有操作都会执行错误检测 .所有上述3中情况都会导致pthreads函数返回错误.这类互斥量运行起来比一般类型的要慢.不过可以将它作为调试工具,以发现在程序中哪里违反了互斥量的使用基本原则
+PTHREAD_MUTEX_RECURSIVE
+	递归互斥量维护了一个锁计数器.当线程第一次获得互斥量时,会将锁计数器置成1.后续同一线程执行的每次加锁操作会递增锁计数器的值,而解锁操作会递减计数器的计数.只有当锁计数器的值降到0时,才会释放(release, 亦即可为其他线程所用)该互斥量.解锁时如
+	目标互斥量处于未锁定的状态,或是已由其他线程锁定,操作都会失败
+PTHREAD_MUTEX_DEFAULT
+	linux上此类型和NORMAL效果相仿
+例子:
+pthread_mutex_t mtx;
+pthread_mutextattr_t mtxAttr;
+int s, type;
+s = pthread_mutexattr_init(&mtxAttr);
+s=pthread_mutexattr_settype(&mtxAttr, PTHREAD_MUTEX_ERRORCHECK);
+s = pthread_mutex_init(&mtx, &mtxAttr);
+pthread_mutexattr_destroy(&mtxAttr);
+
+互斥量防止多个线程同时访问同一个共享变量.条件变量允许一个线程就某个共享变量(或其他共享资源)的状态变化通知其他线程.并让其他线程等待(阻塞于)这一通知
+条件变量总是结合互斥量使用.条件变量就共享变量的状态改变发出通知,而互斥量则提供对改共享变量访问的互斥
+静态分配的条件变量
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+#include <pthread.h>
+int pthread_cond_signal(pthread_cond_t *cond);
+int pthread_cond_broadcast(pthread_cond_t *cond);
+int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex);
+	all return 0 on success, or a positive error number on error;
+函数pthread_cond_signal比pthread_cond_broadcast()更具效率,因为可以避免如下情况
+1.同时唤醒所有线程
+2.某一线程首先得到调度.此线程检查了共享变量的状态(在相关互斥量的保护之下),发现还有任务需要完成.该线程执行了所需工作,并改变共享变量的状态,以表明任务完成,最后释放对相关互斥量的锁定
+3.剩余的每个线程轮流锁定互斥量并检测共享变量的状态,不过,由于第一个线程所做的工作,余下的线程发现无事可做,所及解锁互斥量转而休眠
+
+条件变量并不保存状态信息,只是传递应用程序状态信息的一种通讯机制.发送信号若无任何线程在等待该条件变量,这个信号则会不了了之
+#include <pthread.h>
+int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime)
+	returns o on success, or a positive error number on error;
+
+pthread_cond_wait(),条件变量总是和一个互斥量相关.将这些对象通过函数参数传递给pthread_cond_wait(),其执行如下操作步骤
+1.解锁互斥量mutex
+2.阻塞调用线程,直到另一个线程就条件变量cond发送信号
+3.重新锁定mutex
+static  pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+static int avail = 0;
+生产者
+s = pthread_mutex_lock(&mtx);
+avail++;
+pthread_mutex_unlock(&mtx);
+pthread_cond_signal(&cond);
+
+消费者
+pthead_mutex_lock(&mtx);
+while(/*check that shared variable is not in state we want*/)        // 对于判断条件为什么放在while()中可以在书中参看
+	pthread_cond_wait(&cond, &mtx);
+do some work,开始消费
+pthread_mutex_unlock(&mtx);
+pthread_cond_wait()中,互斥量的释放与陷入对条件变量的等待属于同一个原子操作
+
+经过动态分配的条件变量
+#include <pthread.h>
+int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr);
+	returns 0 on success, or a positive error number on error;
+当不在需要一个经由自动或动态分配的条件变量时,需要调用pthread_cond_destroy()函数予以销毁
+#include <pthread.h>
+int pthread_cond_destroy(pthread_cond_t *cond);
+	returns 0 on success, or a positive error number on error;	
+
