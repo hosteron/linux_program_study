@@ -1,0 +1,73 @@
+线程栈
+调用函数pthread_attr_setstacksize()设置线程栈大小,使用pthread_attr_setstack控制线程栈的大小和位置
+可以用sysconf(_SC_THREAD_STACK_MIN)来确定线程栈的大小,在linux中线程大小是16k
+
+线程和信号
+要了解UNIX信号如何映射到pthreads模型,就需要了解,信号模型的哪些方面属于进程层面(由进程中的所有线程所共享),哪些方面是属于进程中某个单独线程层面
+1.信号动作属于进程层面.如果某进程的任一个线程收到任何未经过处理的信号,且其缺省动作为stop或terminate,那么将停止或终止进程的所有线程
+2.对信号的处置属于进程层面,进程中所有线程共享对某个信号的处置设置
+3.信号的发送即可针对整个进程,也可针对某个特定线程.满足如下三者之一的信号当属面向线程的
+	a.信号的产生源于线程上下文中对特定硬件指令的执行:SIGBUS,SIGFPE,SIGILL,SIGSEGV
+	b.当线程试图对已断开(broken pipe)管道进程写操作时产生的sigpipe信号
+	c.当函数pthread_kill(),pthread_sigqueue()所发起的信号,这些函数允许线程向同一进程下的其他线程发送信号
+	由其他机制产生的所有信号都是面向进程的
+4.当多线程程序收到一个信号时,且该进程已然为该信号创建了信号处理程序时,内核会任选一个线程来接受这个信号,并在该线程中调用信号处理程序对其进行处理,让进程对单个信号重复多次处理没有意义
+5.信号掩码是针对每个线程的.通过操作每个线程的信号掩码,应用程序可以控制哪些线程可以处理进程收到的信号
+5.针对为整个进程所挂起的信号,以及为每条线程所挂起的信号,内核都分别维护有记录.调用sigpending()会返回为整个进程和当前线程挂起信号的并集.在新创建的线程中,每个线程的挂起信号集合初始为空.
+	如果该信号遭到线程阻塞,那么它会一直保持挂起,直到线程将其放行或者线程终止
+6.如果信号处理函数终端了pthread_mutex_lock()的调用,那么该调用总是会自动重新开始.如果信号处理函数终端了对pthread_cond_wait()的调用,则该调用那么自动重新开始,要么返回0,表示遭到假唤醒
+7.信号备选栈是每个线程特有的.新创建的线程并不从创建者处继承备选信号栈
+
+操作线程信号掩码
+刚刚创建的新线程会充创建者处继承信号掩码的一份拷贝.线程可以使用pthread_sigmask()来改变或并获取当前信号掩码
+#include <signal.h>
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+	returns 0 on success,  or a positive error number on success
+
+向线程发送信号
+函数pthread_kill()向同一进程下的另一线程发送信号sig.目标线程由参数thread标识
+#include <signal.h>
+int pthread_kill(pthread_t   thread, int sig);
+	  returns 0 on success,  or a positive error number on success
+
+#define _GNU_SOURCE
+#include <signal.h>
+int pthread_sigqueue(pthread_t thread, int sig, const union sigval value);
+	   returns 0 on success,  or a positive error number on success
+
+没有任何pthreads API属于异步信号安全函数.当多线程应用程序必须处理异步产生的信号时,通常不应该将信号处理函数作为接受信号到达的通知机制,相反,推荐的方式如下
+1.所有线程都阻塞进程可能接受的所有异步信号.最简单的方法是,在创建任何其他线程之前,由主线程阻塞这些信号.后续创建的每个线程都会继承主线程信号掩码的一份拷贝
+2.再创建一个专用线程,调用函数sigwaitinfo(),sigtimedwait()或sigwait()来接受信号
+
+函数sigwait()或等待set所指信号集合中任一信号的到达.接受信号,且在参数sig中将其返回
+#include <signal.h>
+int sigwait(const sigset_t *set, int *sig)
+	  returns 0 on success,  or a positive error number on success
+除了一下不同以外,sigwait()的操作与sigwaitinfo()相同
+1.函数sigwait()只返回信号编号,而非返回一个描述信号的siginfo_t 类型的结构
+2.并且返回值与其他线程相关保持一致(而非传统unix系统调用返回的0或-1)
+如果多个线程在调用sigwait()等待同一信号,那么当信号到达时只有一个线程会实际收到,也无法确定收到信号的会是哪个线程
+
+线程和exec()
+只要任一线程调用了exec()系列函数之一时,调用程序将被完全替换,除了调用exec()的线程之外,其他所有线程都将立即消失,没有任何线程会针对线程特有数据执行解构函数,也不会调用清理函数.改进程所有互斥量和属于进程的条件变量都会消失.调用exec()之后,调用线程的线程id是不确定的
+
+线程和fork()
+当多线程进程调用fork()时,仅会将发起调用的线程复制到子进程中.(子进程中该线程的线程ID与父进程中发起fork()调用线程的线程ID相一致)其他线程均在子进程中消失,也不会为这些线程调用清理函数以及针对线程特有数据的结构函数
+这将导致如下问题
+1.虽然只将发起调用的线程复制到子进程中,但全局变量的状态以及所有Pthreads对象(如互斥量,条件变量等)都会在子进程中得以保留.这会可能导致子进程中的锁处于锁定状态,想再获取锁就不能获取,而且继承来的全局变量可能别其他线程改动到一半继承过来的,现在子进程再操作就有问题了
+2.因为未执行清理函数和针对线程特有数据的解构函数,所以可能导致内存泄露;另外,子进程中的线程可能无法访问(父进程中)由其他线程所创建的线程特有数据项,因为(子进程)中没有相应的引用指针
+
+由于这些问题,推荐在多线程程序中调用fork()的唯一情况是,其后紧跟对exec()的调用.因为新程序会覆盖原有内存,exec()将导致子集成的素有pthreads对象消失
+
+对于那些必须执行fork(),而其后又无exec()紧跟的程序来说,pthreads api提供了一种机制.fork处理函数.可利用函数pthread_atfork()来创建fork处理函数,格式如下
+pthread_atfork(prepare_func, parent_func, child_func);
+
+调用fork()所产生的子进程从调用fork()的线程处继承fork处理函数.执行exec()期间,fork处理函数不再保留
+
+
+线程与exit()
+如果任何线程调用exit(),或者主线程执行了return,那么所有线程都将消失,也不会执行线程特有数据的解构函数以及清理函数
+
+找出系统上的线程实现
+getconf  GNU_LIBPTHREAD_VERSION
+NPTL 2.23
