@@ -1,0 +1,44 @@
+getrusage()系统调用返回调用进程或者其子进程用掉的各类系统资源的统计信息
+#include <sys/resource.h>
+int getrusage(int who, struct rusage *res_usage);
+	returns 0 on success, or -1 on error;
+who 参数指定了需要查询资源使用信息的进程,其取值为下列几个值中的一个
+RUSAGE_SELF
+	返回调用进程相关的信息
+RUSAGE_CHILDREN
+	返回调用进程的所有被终止和处于被等待状态的子进程相关的信息
+RUSAGE_THREAD
+	返回调用线程相关的信息
+struct rusage {
+               struct timeval ru_utime; /* user CPU time used */
+               struct timeval ru_stime; /* system CPU time used */
+               long   ru_maxrss;        /* maximum resident set size */
+               long   ru_ixrss;         /* integral shared memory size */
+               long   ru_idrss;         /* integral unshared data size */
+               long   ru_isrss;         /* integral unshared stack size */
+               long   ru_minflt;        /* page reclaims (soft page faults) */
+               long   ru_majflt;        /* page faults (hard page faults) */
+               long   ru_nswap;         /* swaps */
+               long   ru_inblock;       /* block input operations */
+               long   ru_oublock;       /* block output operations */
+               long   ru_msgsnd;        /* IPC messages sent */
+               long   ru_msgrcv;        /* IPC messages received */
+               long   ru_nsignals;      /* signals received */
+               long   ru_nvcsw;         /* voluntary context switches */
+               long   ru_nivcsw;        /* involuntary context switches */
+           };
+进程资源限制
+linux特有的/proc/PID/limits文件可以用来查看任意进程的所有资源限制
+#include <sys/resource.h>
+int getrlimit(int resource , struct rlimit *rlim);
+int setrlimit(int resource , const struct rlimit *rlim);
+	Both return 0 on success, or -1 on error;
+resource 参数标示出了需要读取或修改的资源限制,rlim参数用来返回限制值或制定新的资源限制值
+
+struct rlimit {
+               rlim_t rlim_cur;  /* Soft limit */ 软限制
+               rlim_t rlim_max;  /* Hard limit (ceiling for rlim_cur) */ 硬限制
+           };
+rlim_cur和rlim_max取值为RLIM_INFINITY表示没有限制
+通过fork()创建的子进程会继承这些限制并且在exec()调用之间不得到保持
+
