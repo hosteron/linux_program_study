@@ -1,0 +1,126 @@
+daemon是具备下列特征的进程
+	1,它的生命周期很长,通常,一个daemon会在系统启动的时候被创建并一直运行直至系统被关闭
+	2.它在后台运行并且不拥有控制终端.控制终端的缺失确保了内核永远不会为daemon自动生成任何任务控制信号以及终端相关信号(如SIGINT,SIGTSTP,SIGHUP)
+daemon是用来执行特殊任务的,如下面的实例所示:
+	1.cron:一个在规定时间执行命令的daemon
+	2.sshd:安全shell daemon,允许在远程主机上使用一个安全的通信协议登录系统
+	3.httpd:HTTP服务daemon,用于服务Web页面
+	4.inetd:internet超级服务器daemon,它监听从指定TCP/IP端口上进入的网络链接并启动相应的服务器程序处理这些链接
+通常会将daemon程序的名称以字母d结尾
+在linux上,特定的daemon会作为内核线程运行.实现此类daemon的代码是内核的一部分,它们通常在系统启动的时候被创建.当使用ps列出线程时,这些daemon的名称会用方括号([])括起来,其中一个是pdflush
+
+创建一个daemon
+	1.执行一个fork(),之后父进程退出,子进程继续运行.(结果是daemon成为init进程的子进程)之所以要做这一步是因为下面两个原因
+		a.假设daemon是从命令行启动的,父进程的终止会被shell发现,shell在发现之后会显示出另一个shell提示符并让子进程继续在后台运行
+		b.子进程被确保不会成为一个进程组首进程,因为它从其父进程那里继承了进程组ID并且拥有了自己的唯一的进程ID,而这个进程ID和继承而来的进程组ID是不同的,这样才能够成功地执行下面的一个步骤
+	2.子进程调用setsid()开启一个新会话并释放它与控制终端之间的关联关系
+	3.如果daemon从来没有打开过控制终端设备,那么就无需关心daemon会重新请求一个控制终端了.如果daemon后面可能会打开一个终端设备,那么必须要采取措施来确保这个设备不会成员控制终端,这可以通过下面两种方式实现
+		a.在所有可能应用到一个终端设备上的open()调用指定O_NOCTTY标记
+		b.或者更简单地说,在setsid()调用之后执行第二个fork(),然后再次让父进程退出并让孙子进程继续运行,这样就确保了子进程不会成员会话的组长,因此根据System V中获取终端的规则,进程永远不会重新请求一个控制终端
+	4.清楚进程的umask以确保当daemon创建文件和目录时拥有所有所需权限
+	5.修改进程的当前工作目录,通常会改为根目录(/).这样做是有必须要的,因为daemon通常会一直运行到系统关闭为止.如果daemon的当前工作目录为不包含/的文件系统,那么就无法卸载该文件系统,
+	   或者daemon可以将工作目录放到完成任务时所在的目录或者在配置文件中指定,确保其文件系统永远不会被卸载即可
+	6.关闭daemon从其父进程继承而来的所有打开的文件描述符.
+	7.在关闭了文件描述符0,1,2之后,会打开/dev/null并使用dup2使所有的这些文件描述符指向这个设备
+		a.确保了daemon调用了在这些文件描述符上执行IO的库函数不会出乎意料的失败
+		b.它防止了daemon后面使用描述符1或2打开一个文件的情况,因为库函数会将这些文件描述符当做标准输出或标准出错来错误写入一些数据(进而破坏原有的数据)
+
+#include <syslog.h>
+void openlog(const cahr *ident, int log_options, int facility);
+ident参数是一个指向字符串的指针,syslog输出的每条消息都会包含这个字符串,这个参数的取值通常是程序名
+ option
+       The option argument to openlog() is an OR of any of these:
+
+       LOG_CONS       Write directly to system console if there is an error while sending to system logger.
+
+       LOG_NDELAY     Open the connection immediately (normally, the connection is opened when the first message is logged).
+
+       LOG_NOWAIT     Don't wait for child processes that may have been created while logging the message.  (The GNU C library does not create a child process,  so  this  option  has  no  effect  on
+                      Linux.)
+
+       LOG_ODELAY     The converse of LOG_NDELAY; opening of the connection is delayed until syslog() is called.  (This is the default, and need not be specified.)
+
+       LOG_PERROR     (Not in POSIX.1-2001 or POSIX.1-2008.)  Print to stderr as well.
+
+       LOG_PID        Include PID with each message.
+facility
+       The facility argument is used to specify what type of program is logging the message.  This lets the configuration file specify that messages from different facilities will be handled differ‐
+       ently.
+
+       LOG_AUTH       security/authorization messages
+
+       LOG_AUTHPRIV   security/authorization messages (private)
+
+       LOG_CRON       clock daemon (cron and at)
+
+       LOG_DAEMON     system daemons without separate facility value
+
+       LOG_FTP        ftp daemon
+
+       LOG_KERN       kernel messages (these can't be generated from user processes)
+
+       LOG_LOCAL0 through LOG_LOCAL7
+                      reserved for local use
+
+       LOG_LPR        line printer subsystem
+
+       LOG_MAIL       mail subsystem
+
+       LOG_NEWS       USENET news subsystem
+
+       LOG_SYSLOG     messages generated internally by syslogd(8)
+
+       LOG_USER (default)
+                      generic user-level messages
+
+       LOG_UUCP       UUCP subsystem
+
+level
+       This determines the importance of the message.  The levels are, in order of decreasing importance:
+
+       LOG_EMERG      system is unusable
+
+       LOG_ALERT      action must be taken immediately
+
+       LOG_CRIT       critical conditions
+
+       LOG_ERR        error conditions
+
+       LOG_WARNING    warning conditions
+
+       LOG_NOTICE     normal, but significant, condition
+
+       LOG_INFO       informational message
+
+       LOG_DEBUG      debug-level message
+
+#include <syslog.h>
+void syslog(int priority, const cahr *format, ...);
+priority参数是facility和level的值的OR值
+如果未指定facility的话,就使用上一个openlog中指定的facility,或者之前也未指定,则使用LOG_USER(默认)
+openlog(argv[0], LOG_PID|LOG_CONS|LOG_NOWAIT,LOG_LOCAL0);
+syslog(LOG_ERROR, "Bad argument:%s", argv[1]);
+syslog(LOG_USER|LOG_INFO, "Exiting");
+
+在shell中使用logger命令来向系统日志中添加条目
+当完成日志 记录之后可以调用closelog()来释放分配给/dev/log socket的文件描述符
+#include <syslog.h>
+void closelog(void);
+
+#include <syslog.h>
+int setlogmask(int mask_priority);
+	returns previus log priority mask
+LOG_MASK()宏
+LOG_UPTO()宏
+其用来指定一个mask,如果日志等级不在这个mask中,日志系统就会将其过滤掉
+/etc/syslog.conf
+facility.level action    选择器  动作
+*.err			/dev/tty10
+auth.notice 	root
+*debug;mail.none;news.none		-/var/log/messages
+每次修改syslog.conf文件之后都需要使用下面的方式让daemon根据这个文件重新初始化自身
+killall -HUP syslogd
+
+syslog.conf格式的更多信息看 man  5 syslog.conf 
+
+
