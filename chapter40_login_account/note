@@ -1,0 +1,129 @@
+在linux中utmp 位于/var/run/utmp文件中.wtmp位于/var/log/wtmp中
+#include <paths.h>中定义了两个变量_PATH_UTMP和_PATH_WTMP
+
+
+ /* Values for ut_type field, below */
+
+           #define EMPTY         0 /* Record does not contain valid info
+                                      (formerly known as UT_UNKNOWN on Linux) */
+           #define RUN_LVL       1 /* Change in system run-level (see
+                                      init(8)) */
+           #define BOOT_TIME     2 /* Time of system boot (in ut_tv) */
+           #define NEW_TIME      3 /* Time after system clock change
+                                      (in ut_tv) */
+           #define OLD_TIME      4 /* Time before system clock change
+                                      (in ut_tv) */
+           #define INIT_PROCESS  5 /* Process spawned by init(8) */
+           #define LOGIN_PROCESS 6 /* Session leader process for user login */
+           #define USER_PROCESS  7 /* Normal process */
+           #define DEAD_PROCESS  8 /* Terminated process */
+           #define ACCOUNTING    9 /* Not implemented */
+
+           #define UT_LINESIZE      32
+           #define UT_NAMESIZE      32
+           #define UT_HOSTSIZE     256
+
+           struct exit_status {              /* Type for ut_exit, below */
+               short int e_termination;      /* Process termination status */
+               short int e_exit;             /* Process exit status */
+           };
+struct utmp {
+               short   ut_type;              /* Type of record */
+               pid_t   ut_pid;               /* PID of login process */
+               char    ut_line[UT_LINESIZE]; /* Device name of tty - "/dev/" */
+               char    ut_id[4];             /* Terminal name suffix,
+                                                or inittab(5) ID */
+               char    ut_user[UT_NAMESIZE]; /* Username */
+               char    ut_host[UT_HOSTSIZE]; /* Hostname for remote login, or
+                                                kernel version for run-level
+                                                messages */
+               struct  exit_status ut_exit;  /* Exit status of a process
+                                                marked as DEAD_PROCESS; not
+                                                used by Linux init (1 */
+               /* The ut_session and ut_tv fields must be the same size when
+                  compiled 32- and 64-bit.  This allows data files and shared
+                  memory to be shared between 32- and 64-bit applications. */
+           #if __WORDSIZE == 64 && defined __WORDSIZE_COMPAT32
+               int32_t ut_session;           /* Session ID (getsid(2)),
+                                                used for windowing */
+               struct {
+                   int32_t tv_sec;           /* Seconds */
+                   int32_t tv_usec;          /* Microseconds */
+               } ut_tv;                      /* Time entry was made */
+           #else
+                long   ut_session;           /* Session ID */
+                struct timeval ut_tv;        /* Time entry was made */
+           #endif
+
+               int32_t ut_addr_v6[4];        /* Internet address of remote
+                                                host; IPv4 address uses
+                                                just ut_addr_v6[0] */
+               char __unused[20];            /* Reserved for future use */
+           };
+           /* Backward compatibility hacks */
+           #define ut_name ut_user
+           #ifndef _NO_UT_TIME
+           #define ut_time ut_tv.tv_sec
+           #endif
+           #define ut_xtime ut_tv.tv_sec
+           #define ut_addr ut_addr_v6[0]
+ #include <utmp.h>
+
+       struct utmp *getutent(void);
+       struct utmp *getutid(const struct utmp *ut);
+       struct utmp *getutline(const struct utmp *ut);
+
+       struct utmp *pututline(const struct utmp *ut);
+
+       void setutent(void);
+       void endutent(void);
+
+       int utmpname(const char *file); //使用指定的utmp文件
+在使用任何getut*函数之前应该调用setutent
+endutent是用来关闭这个文件的
+
+有一些系统实现上,getutline()和getutid()的返回值看成某种高速缓冲区cache.如果他们确定上一个getut*调用放置在高速缓冲中的记录和ut参数指定的标准匹配,那么就不会执行文件读取的动作
+为了避免这种行为使用下面代码避免
+struct utmpx *res = NULL;
+/*Other code imitted*/
+if(ret != NULL)
+	memset(res, 0, sizeof(struct utmpx));
+res = getutxline(&ut);
+
+
+getlogin()  returns  a  pointer  to  a string containing the name of the user logged in on the controlling terminal of the process, or a null pointer if this
+       information cannot be determined.
+#include <unistd.h>
+
+       char *getlogin(void);
+       int getlogin_r(char *buf, size_t bufsize);
+
+       #include <stdio.h>
+
+       char *cuserid(char *string);
+
+
+updwtmp() appends the utmp structure ut to the wtmp file.
+
+       logwtmp()  constructs  a  utmp structure using line, name, host, current time and current process ID.  Then it calls updwtmp() to append the structure to the
+       wtmp file.
+ #include <utmp.h>
+
+       void updwtmp(const char *wtmp_file, const struct utmp *ut);
+       void logwtmp(const char *line, const char *name, const char *host);
+
+       For logwtmp(), link with -lutil.
+
+lastlog文件
+/var/log/lastlog
+在<paths.h>文件中定义了常量:_PATH_LASTLOG
+#define UT_NAMESIZE	32
+#define UT_HOSTSIZE 256
+
+struct  lastlog{
+	time_t  ll_time;
+	char ll_line[UT_NAMESIZE];
+	char ll_host[UT_HOSTSIZE];
+};
+注意这些记录中没有包含用户名和用户ID.lastlog文件中的记录是用户ID作为索引的,因此要找出用户ID为1000的lastlog就需要在文件中偏移(1000*sizeof(struct lastlog))处查找
+
