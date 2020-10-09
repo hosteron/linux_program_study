@@ -1,0 +1,160 @@
+静态库
+1.可以讲一组经常被用到的目标文件组织进单个库文件,这样就可以使用它来构建多个可执行程序并且在构建各个应用程序的时候无需重新编译原来的源代码文件
+2.链接命令变得更加简单了.在链接命令行中只需要指定静态库的名称就行,而无需一个个列出目标文件了.链接器知道如何搜索静态库并将可执行程序需要的对象抽离出来
+
+创建和维护静态库
+ar options archive object-file...
+options参数由一些列的字母组成,其中一个是操作代码,其他是能够影响操作的执行的修饰符.下面是一些常用的操作代码
+	r(替换):将一个目标文件插入到归档文件中并取代同名的目标文件.这个创建和更新归档文件的标准方法,使用下面的命令可以构建一个归档文件
+	cc -g -c mod1.c mod2.c mod3.c
+	ar r libdemo.a mod1.o mod2.o mod3.o
+	rm mod1.o mod2.o mod3.o
+	
+	t(目录表):显示归档文件中的目录表.在木人情况下只会列出归档文件中目标文件的名称.添加v(verbose)修饰符之后可以看到记录在归档文件中的各个目标文件的其他所有特征
+	ar tv libdemo.a 
+	rw-r--r-- 0/0   1272 Jan  1 08:00 1970 mod1.o
+	rw-r--r-- 0/0   1272 Jan  1 08:00 1970 mod2.o
+	rw-r--r-- 0/0   1272 Jan  1 08:00 1970 mod3.o
+	
+	d(删除):从归档文件中删除一个模块
+	ar d libdemo.a mod3.o
+虽然一个静态库可以包含很多目标模块,但链接器只会包含那些程序需要的模块
+
+使用静态库的缺点:
+	1.浪费磁盘空间
+	2.浪费虚拟内存
+	3.如果一个模块需要修改,所有的程序都需要重新编译
+共享库就是为了解决这些缺点的.共享库的关键思想是目标模块的单个副本有所有需要这些模块的程序共享.目标模块不会被复制到链接过的可执行文件在中,相反,当第一个需要共享库中模块的程序启动时,库的单个副本会在运行时被加载进程内存.当后面一个共享库的其他启动时
+,它们会使用已经加载进内存的库的副本
+
+创建一个共享库
+gcc -g -c -fPIC -Wall mod1.c mod2.c mod3.c
+gcc -g -shared -o libfoo.so mod1.o mod2.o mod3.o
+注意可以将编译源代码文件和创建共享库放在一个命令中执行
+gcc -g -fPIC -Wall mod1.c mod2.c mod3.c -shared -o libfoo.so
+
+cc -fPIC选项指定了编译器应该生成位置独立的代码,这回改变编译器生成执行特定操作的代码的方式,包括全局,静态和外部变量,访问字符串常量,以及获取函数的地址.这些变更使得代码可以在运行时被防止在任意一个虚拟地址处
+
+为了确保一个既有目标文件在编译时是否使用了-fPIC选项,可以使用下面两个命令中一个来检查目标文件符号表中是否存在名称_GLOBAL_OFFSET_TABLE_
+	nm mod1.o | grep _GLOBAL_OFFSET_TABLE_
+	readelf -s mod1.o | grep  _GLOBAL_OFFSET_TABLE_	
+
+相应的,如果下面两个互相等价的命令中的任意一个产生了任何输出,那么指定的共享库中至少存在一个目标模块在编译时没有指定-fPIC选项
+	objdump --all-headers libfoo.so | grep TEXTREL
+	readelf -d libfoo.so | grep TEXTREL
+字符串TEXTREL表示存在一个目标模块,其文本段中包含需要运行时重定位的引用
+
+1.在elf中,库的依赖是记录在可执行文件的DT_NEEDED标签中的,一个程序所依赖的所有共享库列表被称为程序的动态依赖列表
+2.在运行是必须要存在某种机制来解析嵌入的库名,动态链接,这个任务是有动态链接器完成的,其本身也是一个共享库,其名称为/lib/ld-linux.so.2
+
+LD_LIBRARY_PATH环境变量
+
+共享库soname
+1.真实名称(real name), 2.使用别名来创建共享库,这种别名称为soname(ELF中的DT_SONAME标签) 3.链接器名称(包含库名同时不包含主要和次要标识符的链接,因此其形式为libname.so)
+如果共享库拥有一个别名soname,那么在静态链接阶段会将soname嵌入到可执行文件中.而不是使用真实名称,同时后面动态链接器在运行时也会使用sonanme来搜索库.
+	引入soname的目的是为了提供一层间接,使得可执行程序能够在运行时使用与链接时使用的库不同的(但兼容的)共享库
+
+gcc -g -c -fPIC -Wall mod1.c mod2.c mod3.c 
+gcc -g -shared -Wl,soname,libbar.so -o libfoo.so mod1.o mod2.o mod3.o
+如果要确定一个既有共享库的soname ,那么可以使用下面的两个命令中一个
+	objdump -p  libfoo.so | grep SONAME
+    readelf -d libfoo.so | grep SONAME
+当使用soname时还需要做一个事情:必须要创建一个符号链接将soname指向库的真实名称,并且要将这个符号链接放在动态链接器搜索的其中一个目录中
+
+使用共享库的有用工具
+ldd (列出动态依赖)命令显示了一个程序运行所需要的共享库
+objdump命令能够用来获取各类信息-包括反汇编的二进制机器码-从一个可执行文件,编译过的目标以及共享库中
+	它还能显示这些文件中各个ELF节的头部信息,当这样使用就相当于命令readelf
+nm命令会列出目标库或可执行程序中定义的一组符号.这个命令的一种用途是找出哪些库定义了一个符号.如要找出哪个库定义了crypt函数则可以像下面这样做
+	nm -A /usr/lib/lib*.so 2> /dev/null | grep  ' crypt$'
+
+共享库的每个不兼容版本是通过一个唯一的主要版本号标识符来区分的,这个主要版本标识符是共享库的正式名称一部分.除了主要版本标识符之外,真实名称还包好一个次要版本标识符,它用来区分库的主要版本中兼容的次要版本
+	真实名称规范为libname.major-id.minor-id
+共享库的soname包括相应的真实名称中的主要版本标识符,但不包含次要版本标识符,因此soname的形式为libname.so.major-id
+
+共享库及其关联的符号链接会被安装在其中一个标准库目录中,标准库目录包括:
+1./usr/lib
+2./lib
+3./usr/local/lib
+4./etc/ld.so.conf中列出的目录
+
+ldconfig解决了共享库的两个潜在问题
+	1.共享库可以位于各个目录中,如果动态链接器需要通过搜索所有这些目录来找出一个库并加载这个库,那么整个过程将非常慢
+	2.当安装了新版本的库或删除了旧版本的库,那么soname符号链接就不是最新的
+
+ldconfig程序通过执行两个任务来解决这些问题
+	1.它搜索一组标准的目录并创建或更新一个缓存文件/etc/ld.so.cache使之包含在所有这些目录中的主要库版本(每个库的主要版本的最新的次要版本)列表.
+		为了构建这个缓存,ldconfig会搜索在/etc/ld.so.conf中指定的目录,然后搜索/lib, /usr/lib.  /etc/ld.so.conf文件由一个目录路径名列表组成
+		ldconfig -p 会显示/etc/ld.so.cache的当前内容
+	2.它检查每个库的各个主要版本的最新次要版本(即具有最大的次要版本号的版本)一找出嵌入的soname,然后在同一个目录为每个soname创建(或更新)相对符号链接
+默认情况下,ldconfig会执行上面两个任务,但可以使用命令行选项来指定它执行其中的一个动作:
+	-N选项会防止缓存的重建
+	-X选项会组织soname符号链接的创建
+	-v选项会使得ldconfig输出描述其所执行的动作的信息
+	-n选项让ldconfig创建soname符号链接,这个选项指定了ldconfig只处理在命令行中列出的目录中的库,而无需更新缓存文件
+
+升级共享库
+	已经运行着的程序会继续使用共享库的上一个次要版本,只有当他们终止或者重启之后才会使用共享库的新次要版本
+	
+通知动态链接器共享库位置的方式:
+	1.LD_LIBRARY_PATH
+	2.将共享库安装在标准目录中(/lib, /usr/lib, /etc/ld.so.conf中指定的目录中)
+	3.-rpath选项
+		gcc -g -Wall -Wl,-rpath,/home/xiang/pdir -o prog prog.c libdemo.so,所有这些列出的目录会被连接成一个放到可执行文件中的有序rpath列表,或者,在一个rpath选项中可以指定多个由分号分割开来的目录列表
+			LD_RUN_PATH变量,只有在不使用rpath选项的时候,这个变量才会生效
+			可以使用objdump -p prog | grep PATH来看RPATH选项内容
+					readelf -d 也是相同的效果
+		在默认情况下,链接器会将rpath列表创建为一个DT_RPATH标签,为了让链接器将rpath列表创建为DT_RUNPATH条目,需要使用额外的参数--enable-new-dtags
+		gcc -g -Wall -o prog prog.c -Wl,--enable-new-dtags -Wl,-rpath,/home/mtk/pdir/d1 -L/home/mtk/pdir/d1 -lx1
+		objdump -p prog | grep PATH
+			RPATH /home/mtk/pdir/d1
+			RUNPATH /home/mtk/pdir/d1
+	  在rpath中使用$ORIGIN ("包含应用程序的目录")
+		gcc -Wl,-rpath,'$ORIGIN/lib' ...  即所谓的turn-key程序
+
+在运行时找出共享库
+1.DT_RPATH中目录
+2.LD_LIBRARY_PATH中的目录,如果是运行了set-user-ID或set-group-ID程序,则忽略这个变量
+3.DT_RUNPATH中的目录
+4./etc/ld.so.cache
+5./lib 和/usr/lib
+
+prog
+======================
+xyz(){
+	printf("main-xyz\n");
+}
+main(){
+	func();
+}
+======================
+
+libfoo.so
+===============
+xyz(){
+	printf("foo-xyz\n");
+}
+func(){
+	xyz();
+}
+==============
+
+gcc -g -c -fPIC -Wall -c foo.c
+gcc -g -shared -o libfoo.so foo.o
+gcc -g -o prog prog.c libfoo.so
+LD_LIBRARY_PATH=./ ./prog
+main-xyz
+
+gcc -g -c -fPIC -Wall -c foo.c
+gcc -g -shared -Wl,-Bsymbolic -o libfoo.so foo.o
+gcc -g -o prog prog.c libfoo.so
+LD_LIBRARY_PATH=./ ./prog
+foo-xyz
+
+-Bsymbolic链接器选项指定了共享库中对全局符号的引用应该优先被绑定到库中的相应定义中(如果存在的话).(注意不管是否使用了这个选项,在主程序中调用xyz()总是会调用主程序中定义的xyz())
+
+如果同时存在libdemo.a, libdemo.so,通过-Lsomedir -ldemo,会优先使用共享库
+强制使用静态库的方法是:
+	1.gcc命令中指定静态库的路径名(包括.a扩展)
+	2.在gcc中指定-static选项
+	3.使用-Wl,-Bstatic和-Wl,-Bdynamic选项显示的指定链接器选在共享库还是静态库
