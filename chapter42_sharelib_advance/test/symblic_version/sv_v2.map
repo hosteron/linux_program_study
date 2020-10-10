@@ -1,0 +1,7 @@
+VER_1{
+	global:xyz;
+	local:*;
+};
+VER_2{
+	global:pqr;
+}VER_1;

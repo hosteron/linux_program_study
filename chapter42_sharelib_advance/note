@@ -1,0 +1,259 @@
+#include <dlfcn.h>
+void *dlopen(const char *filename, int flags);
+在同一个库文件中可以多次调用dlopen(),但将库加载进内存的操作只会发生一次(第一次调用),所有的调用都返回同样的句柄值.但dlopen API会为每个库句柄维护一个引用计数,每次调用dlopen时都会增加引用计数,每次调用dlclose()都会减小引用计数,只有当计数为0时,dlclose()才会从内存中删除这个库
+RTLD_LAZY
+	只有当代码被执行的时候才解析库中未定义的函数符号.如果需要某个特定符号的代码没有被执行,那么永远都不会解析该符号.延迟解析只实用于函数引用,对于变量的引用会被立即解析.指定RTLD_LAZY标记能够提供和与加载可执行文件的动态依赖列表中的共享库时动态链接器的常规操作对应的行为
+RTLD_NOW
+	在dlopen()结束之前立即加载库中所有的未定义符号,不管是否需要用到这些符号,这种做法的结果是打开库变得更慢了,但能够立即检测到任何潜在的未定义函数符号错误,而不是在后面某个时候才检测到这个错误.在调试应用程序时这种做法是比较有用的,因为它能够
+	确保应用程序在碰到未解析的符号时立即发生错误,而不是在执行了很长一段时间之后才发生错误
+
+	LD_BIND_NOW环境变量
+	通过将环境变量LD_BIND_NOW设置一个非空字符串能够强制动态链接器在加载可执行文件的动态依赖列表中的共享库时立即解析所有符号(即类似于RTLD_NOW),这个环境变量在glibc 2.1.1以及以后的版本中是有效的.设置LD_BIND_NOW会覆盖dlopen()RTLD_LAZY标志
+
+RTLD_GLOBAL
+	这个库及其依赖树中的符号在解析由这个进程加载的其他库中的引用和通过dlsym()时可用
+RTLD_LOCAL
+	与RTLD_GLOBAL相反,如果不指定任何常亮,那么就取这个默认值,它规定后续加载的库中的引用时这个库以及依赖树中的符号不可用
+	
+RTLD_NODELETE (since glibc 2.2)
+	Do not unload the shared object during dlclose().  Consequently, the object's static variables are not reinitialized if the object  is  reloaded  with
+              dlopen() at a later time.
+    对于由动态链接器自动加载的库来讲,在创建库时通过指定gcc -Wl,-znodelete选项能够取得类似的效果
+
+RTLD_NOLOAD (since glibc 2.2)
+              Don't  load the shared object.  This can be used to test if the object is already resident (dlopen() returns NULL if it is not, or the object's handle
+              if it is resident).  This flag can also be used to promote the flags on a shared object that is already loaded.  For example, a shared object that was
+              previously loaded with RTLD_LOCAL can be reopened with RTLD_NOLOAD | RTLD_GLOBAL.
+
+RTLD_DEEPBIND (since glibc 2.3.4)
+              Place  the lookup scope of the symbols in this shared object ahead of the global scope.  This means that a self-contained object will use its own sym‐
+              bols in preference to global symbols with the same name contained in objects that have already been loaded.
+              这个标志和gcc -Wl,-Bsymbolic选项类似
+
+将filename指定为NULL时dlopen()会返回主程序的句柄("全局符号对象"的句柄),在后续对dlsym()的调用中使用这个句柄会导致首先在主程序中搜索符号,然后在程序启动时加载的共享库中进程搜索,最后在所有使用了RTLD_GLOBAL标志的动态库中进行搜索
+
+
+#include <dlfcn.h>
+char *dlerror(void);
+Link with -ldl.
+The dlerror() function returns a human-readable, null-terminated string describing the most recent error that occurred from a call to one of the functions in
+       the dlopen API since the last call to dlerror().  The returned string does not include a trailing newline.
+  RETURN
+  dlerror() returns NULL if no errors have occurred since initialization or since it was last called
+通过这种方式清除error信息
+(void)dlerror(); //clear dlerror()
+
+#include <dlfcn.h>
+void *dlsym(void *handle, const char *symbol);
+#define _GNU_SOURCE
+void *dlvsym(void *handle, char *symbol, char *version);  // 和符号版本化相关
+
+int (*funp)(int)
+不能简单地将dlsym()的结果赋给此类函数指针,如下面的例子所示
+funcp = dlsym(handle, symbol); // error
+其原因是c99标准禁止函数指针和void *之间的赋值操作.这个问题的解决方案是使用下面的类型转换
+*(void **)(&funcp) = dlsym(handle, symbol)
+也可以使用这样
+funcp = (int(*)(int))dlsym(handle, symbol);
+
+在dlsym()中使用伪句柄
+
+RTLD_DEFAULT
+   从主程序中开始查找symbol.接着按循序在所有已加载的共享库中查找,包括那些通过使用RTLD_GLOBAL标记的dlopen()调用动态加载的库,这个标记对应于动态链接器所采用的默认搜索模型
+RTLD_NEXT
+	在调用dlsym()之后加载的共享库中搜索symbol,这个标记适用于需要创建与其他地方定义的函数同名的包装函数的情况.如,在主程序中可能会定义一个malloc()(它可能完成内存分配的簿记工作),而这个函数在调用实际的malloc()之前搜索会通过调用func=dlsym(RTLD_NEXT, "malloc")来获取其地址
+==============================================运行时打桩技术======================================================
+	共享库拦截技术之运行时库打桩
+	运行时库打桩是库打桩技术中的一种，另外两种是编译时库打桩和链接时库打桩。它可以在程序加载时或程序运行过程中对共享库进行打桩。
+	https://blog.csdn.net/wohenfanjian/article/details/107544791
+	https://blog.csdn.net/wohenfanjian/article/details/107573837
+================================================================================================================
+
+ int dlclose(void *handle);
+
+#define _GNU_SOURCE
+#include <dlfcn.h>
+int dladdr(void *addr, Dl_info *info);
+typedef struct {
+   const char *dli_fname;  /* Pathname of shared object that
+							  contains address */
+   void       *dli_fbase;  /* Base address at which shared
+							  object is loaded */
+   const char *dli_sname;  /* Name of symbol whose definition
+							  overlaps addr */
+   void       *dli_saddr;  /* Exact address of symbol named
+							  in dli_sname */
+} Dl_info; 
+
+
+=========在主程序中访问符号========
+假设使用dlopen()动态加载了一个共享库,然后使用了dlsym()获取了共享库中x()函数的地址,接着调用x().如果x()中调用了函数y(),那么通常在程序加载的其中一个共享库搜索y()
+有时候需要让x()调用主程序中的y()实现(类似回调机制).为了达到这个目的就是必须要使主程序中的符号(全局作用域)对动态链接器可用,即在链接程序时使用--export-dynamic链接器选项
+gcc -Wl,--export-dynamic main,c
+或者可以编写下面的等价命令
+gcc -export-dynamic main.c
+使用这些选项中的一个就能够允许动态加载的库访问主程序中的全局符号了
+gcc -rdynamc选项和gcc -Wl,-E选项的含义,以及-Wl,--export-dynamic是一样的
+
+======控制符号的可见性===========
+1.采用static关键字
+2.void __attribute__((visibility("hidden"))) func(void){
+	//code
+}
+static 关键子将一个符号的可见性限制在单个源代码文件中,而hidden特性使得一个符号对构成共享库的所有元代文件可见,单对库之外的文件不可见
+3.版本脚本可以用来精确的控制符号的可见性以及选择将一个引用绑定到符号的哪个版本
+4.当动态加载一个共享库,dlopen()接受的RTLD_GLOBAL标记可以用来执行这个库定义的符号应该用于后续加载的库中的绑定操作,--export-dynamic链接器选项可以用来使主程序的全局符号对动态加载的库可见
+
+=======链接器版本脚本========
+要使用版本脚本必须要指定--version-script链接器选项
+gcc -Wl,--version-script,myscriptfile.map ...
+
+例子:
+vis_common.c , vis_f1.c, vis_f2.c三个源文件分别定义了vis_common(), vis_f1(), vis_f2(),
+gcc -g -c -fPIC -Wall vis_common.c vis_f1.c vis_f2.c
+gcc -shared -o vis.so vis_common.o vis_f1.o vis_f2.o
+readelf --syms  --use-dynamic vis.so  | grep  vis_
+    9   0: 0000000000000740    29 FUNC    GLOBAL DEFAULT  12 vis_f2
+   13   2: 0000000000000710    19 FUNC    GLOBAL DEFAULT  12 vis_common
+   15   2: 0000000000000723    29 FUNC    GLOBAL DEFAULT  12 vis_f1
+我们发现它导出了3个符号,vis_common, vis_f1, vis_f2,其实我们不想导出vis_common的
+-----------------------------------
+cat vis.map
+VER_1{
+		global:
+			vis_f1;
+			vis_f2;
+	    local:
+			*;
+};
+gcc -g -shared -o vis2.so vis_common.o  vis_f1.o  vis_f2.o  -Wl,--version-script,vis.map
+readelf  vis2.so  --syms  --use-dynamic    | grep  vis_
+    8   0: 0000000000000690    29 FUNC    GLOBAL DEFAULT  13 vis_f2
+   10   2: 0000000000000673    29 FUNC    GLOBAL DEFAULT  13 vis_f1
+
+========符号版本化======
+glibc从2.1开始支持这中符号版本化技术的,因此在2.0以及之前的所有版本都是通过单个主要版本来支持的
+---------------初始的版本
+cat sv_lib_v1.c 
+#include <stdio.h>
+void xyz(void)
+{
+	printf("v1 xyz\n");
+}
+cat sv_v1.map 
+VER_1{
+	global:xyz;
+	local:*;
+};
+gcc -g -c -Wall -fPIC sv_lib_v1.c
+gcc -g -shared -o libsv.so sv_lib_v1.o  -Wl,--version-script,sv_v1.map
+ cat sv_prog.c 
+#include <stdlib.h>
+int main()
+{
+	void  xyz();
+	xyz();
+	exit(EXIT_SUCCESS);
+}
+gcc -g -o p1 sv_prog.c  libsv.so
+LD_LIBRARY_PATH=./ ./p1 
+v1 xyz
+
+--------------采用符号版本化后的版本------------------
+cat sv_lib_v2.c
+#include <stdio.h>
+__asm__(".symver xyz_old,xyz@VER_1");
+__asm__(".symver xyz_new,xyz@@VER_2"); // 两个@@是为了指示当程序与这个共享库进行静态链接时应该使用的默认定义
+void xyz_old()
+{
+        printf("v1 xyz\n");
+}
+void xyz_new()
+{
+        printf("v2 xyz\n");
+}
+void pqr()
+{
+        printf("v2 pqr\n");
+}
+cat sv_v2.map 
+VER_1{
+	global:xyz;
+	local:*
+};
+VER_2{
+	global:pqr;
+}VER_1;
+
+gcc -g -c -fPIC sv_lib_v2.c
+gcc -g -shared -o libsv.so sv_lib_v2.o  -Wl,--version-script,sv_v2.map
+gcc -g -o p2 sv_prog.c  libsv.so
+ LD_LIBRARY_PATH=./ ./p2
+v2 xyz
+
+LD_LIBRARY_PATH=./ ./p1 
+v1 xyz
+
+objdump -t p1 | grep xyz                                                          // readelf -s 也可以输出了类似的效果
+0000000000000000       F *UND*	0000000000000000              xyz@@VER_1
+objdump -t p2 | grep xyz
+0000000000000000       F *UND*	0000000000000000              xyz@@VER_2
+
+=========初始化和终止函数==================================
+void __attribute__((constructor))  some_name_load(void)
+{
+	//initialization code
+}
+void __attribute__((destructor)) some_name_unload(void)
+{
+	// finalization code
+}
+
+======预加载共享库=======================
+ LD_PRELOAD=libalt.so ./prog 这个是进程级别的
+ 也可以在/etc/ld.so.preload 文件中定义系统层面上的预加载
+ LD_PRELOAD的优先级比/etc/ld.so.preload更高
+ 处于安全原因,和LD_LIBRARY_PATH变量一样,set-user-ID和set-group-ID程序忽略LD_PRELOAD
+ 
+=======监控动态链接器:LD_DEBUG========
+有些时候需要监控动态链接的操作以弄清楚它在搜索哪些库,这可以通过LD_DEBUG环境变量来完成.统统将这个变量设置为一个(或多个)标准关键词可以从动态链接器中得到各种跟踪信息
+LD_DEBUG=help date   // help 关键字输出帮助信息,这个命令自身不会被执行
+Valid options for the LD_DEBUG environment variable are:
+
+  libs        display library search paths
+  reloc       display relocation processing
+  files       display progress for input file
+  symbols     display symbol table processing
+  bindings    display information about symbol binding
+  versions    display version dependencies
+  scopes      display scope information
+  all         all previous options combined
+  statistics  display relocation statistics
+  unused      determined unused DSOs
+  help        display this help message and exit
+
+To direct the debugging output into a file instead of standard output
+a filename can be specified using the LD_DEBUG_OUTPUT environment variable
+
+要将调试信息输出到一个文件中而不是输出到标准输出中,则可以使用LD_DEBUG_OUTPUT环境变量指定一个文件名
+
+LD_DEBUG=libs date
+     29382:	find library=libc.so.6 [0]; searching
+     29382:	 search cache=/etc/ld.so.cache
+     29382:	  trying file=/lib/x86_64-linux-gnu/libc.so.6
+     29382:	
+     29382:	
+     29382:	calling init: /lib/x86_64-linux-gnu/libc.so.6
+     29382:	
+     29382:	
+     29382:	initialize program: date
+     29382:	
+     29382:	
+     29382:	transferring control: date
+     29382:	
+2020年 10月 10日 星期六 18:58:45 CST
+----------LD_DEBUG------对动态链接器隐式加载的库和使用dlopen()动态加载的库都有效
+处于安全原因,和LD_LIBRARY_PATH变量一样,set-user-ID和set-group-ID程序忽略LD_DEBUG
+ 
+
+
