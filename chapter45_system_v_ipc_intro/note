@@ -1,0 +1,211 @@
+System V IPC 包括三种不同的进程间通信机制
+１．消息队列用来在进程之间传递消息．消息队列与管道有点像，但存在两个重大差别
+	a.消息队列是存在边界的，这样读者和写者之间以消息进行通信
+	b.每条消息包括一个整型的type字段，并且可以通过类型类选择消息而无需以消息被写入的循序来读取信息
+2.信号量允许多个进程同步它们的动作．这个信号量是一个由内核维护的整数值，它对所有具备相应权限的进程可见．一个进程通过对信号量的值进程相应的整数修改来通知其他进程它正在执行某个动作
+3.共享内存使得多个进程能够共享内存（即同被映射到多个进程的虚拟内存的页帧）的同一块区域（）称为一个段 ．由于访问用户空间内存的操作是非常快的，因此共享内存是其中一种速度最快的IPC方法：一个进程一旦更新了共享内存，那么这个变更会立即对共享同一块内存段的其他进程可见
+
+System V IPC 是一个通过CONFIG_SYSVIPC选项进行配置的内核选项
+
+一些实现要求在包含表45-1中的头文件之间先包含<sys/types.h>.一些较早的unix实现可能还要求包含<sys/ipc.h>(没有哪个unix规范要求这些头文件)
+
+表45-1　System V IPC对象变成接口总结
+	接口				消息队列				信号量					共享内存
+	头文件			<sys/msg.h>			<sys/sem.h>				<sys/shm.h>
+	关联数据结构		msqid_ds			semid_ds				shmid_ds
+	创建/打开对象		msgget()			semget()				shmget()+shmat()
+	关闭对象			(无)					(无)						shmdt()
+	控制操作			msgctl()			semctl()				shmctl()
+	执行IPC			msgsnd()--写入消息	semop()－测试/调整信号量   访问共享区域中的内存
+					msgrcv()--接受消息	
+
+每种System V IPC 机制都有一个先关的get系统调用(msgget(),semget()或shmget())，它与文件上的open()系统调用类似．给定一个整数key(类似于文件名),get调用完成下列某个操作
+	1.使用给定的key创建一个新IPC对象并返回一个唯一的标识符来标示该对象
+	2.返回一个用给定的key的既有IPC对象
+
+IPC标识符与文件描述符类似，在后续所有引用该IPC对象的系统调用中都需要用到它．但这两者之间存在一个重要的语义上的差异．文件描述符是一个进程特性，而IPC标识符则是对象本身的一个属性并对系统全局可见．
+例子：
+	id = msgget(key, IPC_CREAT | S_IRUSR|S_IWUSR);
+	与所有的ｇｅｔ调用一样，key 是第一个参数，标识符是函数的返回结果．传递给get调用的最后一个参数(flags)使用与文件一样的掩码常量指定了新对象上的权限．在上面的例子中只给对象的所有者赋予了在队列中读取和写入消息的权限
+	进程的umask对新创建的IPC对象上的权限是不适用的
+
+	所有需访问同一个IPC对象的进程在执行get调用时会指定相同的key以获得该对象的同一个标识符；如果没有与给定的ｋｅｙ对应的IPC对象存在并且在flags参数中指定了IPC_CREAT,那么get调用会创建一个新的IPC对象；如果不存在对应的IPC对象而且没有指定IPC_CREAT，且key不是指定的是IPC_PRIVATE，那么get调用会失败并返回ENOENT错误
+	一个进程可以通过指定IPC_EXCL标记（类似于open()O_EXCL标记）来确保它是创建IPC对象的进程．如果指定了IPC_EXCL并且与给定key对应的IPC对象已经存在，那么get调用会失败并且返回EEXIST错误
+	
+IPC对象删除和对象持久
+	各种System V　IPC机制的ctl系统调用(msgctl, semctl(), shmctl())在对象上执行一组控制操作，其中很多操作是特定于某种IPC机制的，但有一些是实用于所有的IPC机制的，其中一个就是IPC_RMID控制操作，它可以用来删除一个对象．如使用下面的调用
+	可以删除一个共享内存对象
+	if(shmctl(id, IPC_RMID, NULL) == -1)
+		errExit("shmctl");
+	
+	对于消息队列和信号量来将，IPC对象的删除是立即生效的，对象中包含的所有信息都会被撤销，不管是否有其他进程任然在使用该对象．这个和文件不一样，文件即使最后一个链接被删除，只要有进程持有这个文件的打开文件描述符，则文件就没有被删除
+	共享内存对象的删除的操作是不同的．在shmctl(id, IPC_RMID, NULL)调用之后，只有当所有使用该内存段的进程与该内存段分离之后（使用shmdt()）才会删除该共享内存段（这一点与文件删除更加接近）
+	
+	System V IPC对象具备内核持久性．一旦被创建之后，一个对象就一直存在直到它被显式地删除或系统被关闭．System V IPC对象的这个属性是非常有用的，因为一个进程可以创建一个对象，修改其状态，然后退出并使得后面某个时刻启动的进程可以访问这个对象．但这种属性也存在缺点，其原因如下
+		１．系统对每种类型的IPC对象的数量是有限制的．如果没有删除不用的对象，那么应用程序最终可能因达到这个限制而发生错误
+		２．在删除一个消息队列或信号量对象时，对个进程应用程序可能难以确定哪个进程是最后一个需要访问对象的进程，从而导致难以确定何时可以安全地删除对象．这里的问题是这些对象是无链接的－－内核不会记录哪个进程打开了对象
+			（共享内存短不存在这个缺点，因为它们的删除操作的语义不同）
+
+IPC key
+    Sytem IPC key 是一个整数值，其数据类型为key_t.IPC　get调用将一个key转换成相应的整数IPC标识符.这些调用能够确保如果创建的是一个新IPC对象，那么对象能够得到一个唯一的标识符，如果指定了一个既有对象的ｋｅｙ，那么总是会得到该对象的标识符
+    如何产生一个唯一的key值呢
+    1.随机地选取一个整数值作为key值，这些整数值通常会被放在头文件中，所有使用IPC对象的程序需要包含这个头文件．这个方法的难点在于可能会无意中选取了一个已被另一个应用程序使用的值
+    ２．在创建IPC对象的get调用中将IPC_PRIVATE常量作为key的值．这样就会导致每个调用都会创建一个全新的IPC对象，从而确保每个对象都拥有一个唯一的ｋｅｙ
+    ３．使用ｆｔｏｋ（）函数生成一个（接近唯一）key
+    IPC_PRIVATE和ftok()是通常采用的技术
+
+使用IPC_PRIVATE产生一个唯一的key
+	在创建一个新IPC对象时必须要像下面这样将key指定为IPC_PRIVATE	
+	id = msgget(IPC_PRIVATE, S_IRUSR |S_IWUSR);
+	在上面的代码中无需指定IPC_CREAT和IPC_EXCL标记
+	这项技术对于父进程在执行fork()之前创建IPC对象从而导致子进程继承IPC对象标识符的多个进程应用程序是特别有用的．在客户端－服务器应用程序中（即那些包含非相关进程应用程序）也可以使用这项技术，但客户端必须要通过某种机制获取由服务器创建的IPC对象的标识符（反之亦然）．如在创建万一个IPC对象之后，服务器可以将这个标识符写入一个将被客户端读取的文件中
+
+使用ftok()产生一个唯一的key
+	#include <sys/types.h>
+    #include <sys/ipc.h>
+
+    key_t ftok(const char *pathname, int proj_id);
+		On success, the generated key_t value is returned.  On failure -1 is returned, with errno indicating the error as for the stat(2) system call.
+	key值是使用实现定义的算法更具提供的pathname和proj值生成的
+	１．算法只使用proj的最低的8个有效位
+	２．应用程序必须要确保pathname引用一个可以应用stat()的既有文件（否则ftok()会返回－１）
+	３．如果将引用同一个文件不通的路径名传递给了ftok()并且指定了相同的proj值，那么函数必须返回相同的key
+	换句话说,ftok是使用i-node号来生成key，并不是使用文件名来生成的，如果在使用ftok和相应的ipc对象时，不要删除相应的文件； 其返回的ｋｅｙ值是通过proj+文件所属文件系统的设备号的低８位+文件的i-node号的低１６位组成
+	不要对proj_id值取０，这个值没有意义
+	使用这个ftok技术存在一个限制，及两个不同的文件可能会产生相同的key值（可能性非常小）
+		原因：不同文件系统中的两个文件的i-node最低有效位可能会相同，并且两个不通磁盘设备（位于具有多个磁盘控制器的系统上）可能会拥有相同的次要设备号，但是实践中这种概率非常之小
+	ftok()的典型用法
+	key_t key;
+	int id;
+	key = ftok("/mydir/myfile", "x");
+	if(key == -1)
+		errExit("fork");
+	id = msgget(key, IPC_CREAT | S_IRUSR |S_IWUSR);
+	if(id == -1)
+		errExit("msgget");
+
+关联数据结构和对象权限
+	内核为SYstem IPC 对象的每个实例都维护着一个关联数据结构．这个数据结构的形式因IPC进制（消息队列，信号量，或共享内存）的不同而不通，它是在各个ＩＰＣ对应的头文件中进程定义的
+	一个IPC对象的关联数据结构会在通过相应的get系统调用创建对象时进程初始化．对象一旦被创建之后，程序就可以通过指定IPC_STAT操作类型使用适合的ctl系统调用来获取这个数据结果的一个副本．使用IPC_SET操作能够修改这个数据结构
+	所有三种ipc机制的关联数据结构都包含一个子结构ipc_perm,它用于确定对象之上的权限的信息
+	struct ipc_perm {
+               key_t          __key;       /* Key supplied to msgget(2) */
+               uid_t          uid;         /* Effective UID of owner */
+               gid_t          gid;         /* Effective GID of owner */
+               uid_t          cuid;        /* Effective UID of creator */
+               gid_t          cgid;        /* Effective GID of creator */
+               unsigned short mode;        /* Permissions */
+               unsigned short __seq;       /* Sequence number */
+           };
+     可以通过下面代码修改共享内存的uid字段，其所有者ｉｄ
+	struct shmid_ds shmds;
+	if(shmctl(id, IPC_STAT, &shmds) == -1)
+		errExit("shmctl");
+	shmds.shm_perm.uid = newuid;
+	if(shmctl(id, IPC_SET, &shmds)_== -1)
+		errExit("shmctl");
+	
+	只有读写权限有效，执行权限忽略
+	会根据进程的有效用户，有效组，辅助组ＩＤ来校验进行
+	msgget(key, IPC_CRREAT | S_IRUSR | S_IWUSR | S_IRGRP);
+	另一个用户
+	msgget(id, S_IRUSR|S_IWUSR);则失败，因为是另一个用户，没有写权限 ，如果这样msgget(key, 0);这样就会绕过权限检查，这样只有当程序试图执行一个msgsnd()写入一个消息时就会发生错误
+	虽然可执行权限对system V ipc 对象没有意义，但是如果get调用中指定了，那么权限管理则回去校验这个可执行权限了
+	
+	删除一个ＩＰＣ对象或修改其关联数据结构(IPC_SET　ctl操作)不需要读和写权限，相反，调用进程必须是特权进程或有效用户ｉｄ和对象的所有者用户ｉｄ或创建者用户ｉｄ匹配（否则返回错误EPERM）
+
+内核采用了一个算法，通常能够确保在创建新ipc对象时，对象会得到一个不同的标识符，即使传入的key是一样的．其结果是所有与老的服务器进程链接的客户端在使用旧的标识符时会从相关的IPC系统调用中收到一个错误
+
+System V IPC get调用使用的算法
+	对于每种IPC机制（消息队列，共享内存，信号量），内核都会维护一个关联的ipc_ids结构，它记录着该ipc机制的所有实例的各种全局信息，包括一个大小会动态变化的指针数组entries，数组中的每个袁术指向一个对象实例的关联数据结构（在信号量中是semid_ds）entries的当前大小记录在size字段，max_id字段记录着当前使用中的元素的最大下标
+	
+	ipc_ids结构
+	(sem_ids)         --------------------------
+	size = 128    　　　|sem_perm.__key=0x4d0731db |
+	in_use=2         |....                      |
+	max_id=3         |sem_perm.__seq = 9        |
+	seq=10           |....                      |
+	...              ----------------------------
+	entries 0                                      关联数据结构semid_ds
+			1         -----------------------------
+			2         |sem_perm.__key = 0x4b079002|
+			3         |....                       |
+			...       |sem_perm.__seq = 5         |
+			          |....                       |
+	                  -----------------------------
+
+	标识符号计算公式: identifier = index + xxx_perm.__seq * SEQ_MULTIPLIER（３２７６８，　内核源文件include/linux/ipc.h中的IPCMNI）
+	如果给定一个标识符号
+	index = identifier %SEQ_MULTIPLIER
+	当一个进程执行一个IPC系统调用(msgctl, semop()或shmat())时传入一个与既有对象不匹配的标识符，那么就会导致两个错误的发生．如果entries中的相应下标处是空的，那么会导致EINVAL错误，如果下标指向了一个关联数据结构，但存储在该结构中的
+	序号导致不会产生相同的标识符值，那么就假设这个数组下标指向的就对象已经被删除，该下标会被重用，通过错误EIDRM可以诊断出这种情况的发生
+
+ipcs和ipcrm命令
+	其是System V ipc领域类似与ls和rm文件命令的命令
+这个是返回有读权限的ipc对象
+$ipcs 
+
+------ Message Queues --------
+key        msqid      owner      perms      used-bytes   messages    
+
+------ Shared Memory Segments --------
+key        shmid      owner      perms      bytes      nattch     status      
+0x00000000 524288     xiang      600        524288     2          dest         
+0x00000000 1245185    xiang      600        134217728  2          dest         
+0x00000000 425986     xiang      600        524288     2          dest         
+0x00000000 819203     xiang      600        524288     2          dest         
+0x00000000 1343492    xiang      600        524288     2          dest         
+0x00000000 983045     xiang      600        16777216   2                       
+0x00000000 1212422    xiang      600        524288     2          dest         
+0x00000000 1441799    xiang      600        524288     2          dest         
+0x00000000 1572872    xiang      600        7835648    2          dest         
+0x00000000 4063241    xiang      600        32768      2          dest         
+0x00000000 1540106    xiang      600        7835648    2          dest         
+0x00000000 2752523    xiang      600        245760     2          dest         
+0x00000000 1736716    xiang      600        524288     2          dest         
+0x00000000 2031629    xiang      600        524288     2          dest         
+0x00000000 2162702    xiang      600        393216     2          dest         
+0x00000000 2392079    xiang      700        187880     2          dest         
+0x00000000 2261008    xiang      600        393216     2          dest         
+0x00000000 4030481    xiang      600        32768      2          dest         
+0x00000000 2555922    xiang      600        45056      2          dest         
+0x00000000 2588692    xiang      600        45056      2          dest         
+0x00000000 2621461    xiang      600        552960     2          dest         
+0x00000000 2654230    xiang      600        552960     2          dest         
+0x00000000 2850839    xiang      600        45056      2          dest         
+0x00000000 2785304    xiang      600        245760     2          dest         
+0x00000000 2818073    xiang      600        45056      2          dest         
+0x00000000 5046300    xiang      700        7839744    2          dest         
+
+------ Semaphore Arrays --------
+key        semid      owner      perms      nsems
+
+ipcrm命令删除一个ｉｐｃ对象．这个命令的常规形式为下面两种形式中的一种
+$ipcrm -X key
+$ipcrm -x id; 除了这种指定标识符的，可以直接　ipcrm -q(消息队列)　-s(信号量)　-m(用于共享内存)
+
+获取所有ipc对象的列表
+ｌｉｎｕｘ提供了两种获取系统上所有ipc对象列表的非标准方法
+	１．/proc/sysvipc目录中的文件会列出所有ipc对象
+	2.使用linux特有的ctl调用
+
+ipcs -l －－－－－－－－－可以列出各ipc在系统上的限制
+
+------ Messages Limits --------
+max queues system wide = 32000
+max size of message (bytes) = 8192
+default max size of queue (bytes) = 16384
+
+------ Shared Memory Limits --------
+max number of segments = 4096
+max seg size (kbytes) = 18014398509465599
+max total shared memory (kbytes) = 18014398442373116
+min seg size (bytes) = 1
+
+------ Semaphore Limits --------
+max number of arrays = 32000
+max semaphores per array = 32000
+max semaphores system wide = 1024000000
+max ops per semop call = 500
+semaphore max value = 32767
+
