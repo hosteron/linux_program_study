@@ -1,0 +1,209 @@
+一个信号量是一个由内核维护的整数,其值被限制为大于或等于0.在一个信号量上可以执行各种操作,包括:
+	1.将信号量设置成一个绝对值
+	2.在信号量当前值的基础上加上一个数量
+	3.在信号量当前值的基础上减去一个数量
+	4.等待信号量的值等于0
+
+使用System v信号量的常规步骤如下:
+	1.使用semget()创建或打开一个信号量
+	2.使用semctl SETVAL或SETALL操作初始化集合中的信号量(只有一个进程需要完成这个任务)
+	3.使用semop()操作信号量.使用信号量的进程通常会使用这个操作来表示一个共享资源的释放和获取
+	4.当所有进程都不再需要使用信号量集之后使用semctl()IPC_RMID操作删除这个集合(只有一个进程需要完成这个操作)
+
+创建或打开一个信号量集
+	semget()系统调用创建一个新信号量集或获取一个既有集合的标识符
+	#include <sys/types.h>
+	#include <sys/sem.h>
+	int semget(key_t  key, int nsems, int semflg);
+		returns semaphore set indentifier on success,  or -1 on error;
+
+	如果使用semget()创建一个新信号量集,那么nsems会指定集合中信号量的数量,并且其值必须大于0.如果使用semget()来获取一个既有集的标识符,那么nsems必须要小于或等于集合的大小(否则发生EINVAL错误).无法修改一个既有集中的信号量数量
+	semflg参数是一个位掩码,它指定了施加于新信号集智商的权限或需检查的一个既有集合的权限
+		IPC_CREAT
+		IPC_EXCL
+	semget()在成功时会返回新信号集或既有信号量集的标识符.后续引用单个信号量的系统调用必须要同时执行信号量集标识符和信号量在集合中序号.一个集合中的信号量从0开始计数
+
+信号量的控制操作
+	#include <sys/types.h>
+	#include <sys/sem.h>
+	int semctl(int semid, int semnum, int cmd , ...);
+		returns nonnegative integer on success (see text);return -1 on error;
+	semid参数是操作所施加的的信号量集的标识符.对于那些在单个信号量上执行的操作,semnum参数标识出了集合中的具体信号量.对于其他操作会忽略这个参数.并且可以将其设置为0.cmd参数指定了需要执行的操作
+	一些特定的操作需要向semctl传入第4个参数,在本节余下的部分中将这个参数命名为arg.这个参数是一个union;在程序中必须显示的定义这个union
+	
+	 This function has three or four arguments, depending on cmd.  When there are four, the fourth has the type union semun.  The calling program must define this union as follows:
+
+           union semun {
+               int              val;    /* Value for SETVAL */
+               struct semid_ds *buf;    /* Buffer for IPC_STAT, IPC_SET */
+               unsigned short  *array;  /* Array for GETALL, SETALL */
+               struct seminfo  *__buf;  /* Buffer for IPC_INFO
+                                           (Linux-specific) */
+           };
+
+
+	在以前的老的unix实现中,semctl()原型如下;
+	int semctl(int semid, int semnum, int cnd, union semun arg);->所以为了保证程序的可移植性,在那些无需最后一个参数的semctl()调用中需要传入一个哑参数(比如IPC_RMID, IPC_GETVAL)
+	
+	下面的cmd参数都是会忽略semnum参数的
+	IPC_RMID
+	IPC_STAT:在arg.buf指向的缓冲器中放置一份与这个信号量相关联的semid_ds数据结构的副本
+	IPC_SET:使用arg.buf更新相关联的数据结构semid_ds
+	
+	获取和初始化信号量值
+	下面的操作可以获取或初始化一个集合中的单个或所有信号量的值.获取一个信号量值需要具备在信号量上的读权限,而初始化该值则需要修改(写)权限
+	GETVAL
+		semctl()返回semid指定的信号量集中的第semnum个信号量的值.这个操作无需arg参数
+	SETVAL
+		将由semid执行的信号量集中的第semnum个信号量的值初始化为arg.val
+	GETALL
+		获取由semid指向的信号量集中所有信号量的值并将他们放在arg.array指向的数组中
+		程序员必须要确保该数组具备足够的空间(通过由IPC_STAT操作返回的semid_ds数据结构中的sem_nsems字段可以获取集合中的信号量的数量)这个操作忽略semnum参数
+	SETALL
+		使用arg.array指向的数组的值初始化semid指向的集合中的所有信号量.这个操作将忽略semnum参数
+		如果存在一个进程正在等待在由SETVAL或SETALL操作所修改的信号量上执行一个操作并且对信号量所做的变更将允许该操作继续向前执行,那么内核就会唤醒该进程
+		使用或SETALL修改一个信号量的值会在所有进程中清楚该信号量的撤销条目
+		注意GETALL或GETVAL返回的信息在调用进程使用他们时可能已经过期了,所有依赖由这些操作返回的信号保持不变这个条件的程序都可能会遇到检查时和使用时的竞争条件
+		
+	获取单个信号量的信息
+		下面的操作返回(通过函数结果值)semid引用的集合中第semnum个信号值的信息,所有这些操作都需要在信号集中具备读权限,并且无需arg参数
+	GETPID
+		返回上一个在该信号量上执行semop()的进程的进程ID;这个值被称为sempid值.如果没有进程在该信号量上执行过semop(),那么就返回0
+	GETNCNT
+		返回当前等待该信号的值增长的进程数;这个值被称为semncnt值
+	GETZCNT
+		返回当前等待该信号量的值变成0的进程数,这个值被称为semzcnt值
+	与上面介绍的GETVAL和GETVALL操作一样.GETPID,GETNCNT,GETZCNT操作返回的信息在调用进程使用它们时可能已经过期
+	
+	struct semid_ds {
+               struct ipc_perm sem_perm;  /* Ownership and permissions */
+               time_t          sem_otime; /* Last semop time */
+               time_t          sem_ctime; /* Last change time */
+               unsigned long   sem_nsems; /* No. of semaphores in set */在创建集合时将这个字段的值初始化为集合中信号量的数量
+           };
+
+信号量初始化
+	根据SUSv3的要求,实现无需对由semget()创建的集合中的信号量值进行初始化.相反,程序员必须要使用semctl()系统调用显示地初始化信号量(在linux上,semget()返回的信号量实际上会被初始化为0,但为了取得移植性就不能依赖于此)
+	信号量的创建和初始化必须要通过单独的系统调用而不是单个原子步骤来完成的事实可能会导致在初始化一个信号量时出现竞争条件
+	case :
+		在第一个进程创建sem和初始化sem之间,第二个进程获取这个sem,然后执行semop(这个操作在没有经过初始化的sem上执行了semop), 然后第一个进程恢复执行,其负责初始化信号量sem,这里又把第二个进程的semop的操作覆盖掉了
+	
+	这个问题的解决方案依赖于一个现已称为标准的特性,即于这个信号量集相关联的semid_ds数据结构中的sem_otime字段的初始化.在一个信号量集首次被创建时,sem_otime字段会被初始化为0,并且只有后续的semop()调用才会修改这个字段的值.
+		因此可以利用这个特性来消除上面描述的竞争条件,即只需要插入额外的代码来强制第二个进程(即没有创建信号量的那个进程)等待直到第一个进程即初始化了信号量又执行了一个更新sem_otime字段但不修改信号量的值的semop()调用为止
+	
+信号量操作
+	semop()系统调用在semid标识的信号量中的信号量上执行一个或多个操作
+	#include <sys/types.h>
+	#include <sys/sem.h>
+	int semop(int semid, struct sembuf *sops, unsigned int nsops);
+		returns 0 on success, or -1 on error;
+	sops参数是一个指向数组的指针,数组中包含了需要执行的操作,nsops参数给出了数组的大小(数组至少需包含一个元素).操作会按照在数组中的循序以原子的方式被执行,sops数组中的元素形式如下的结构
+	struct sembuf中包含下面字段
+		unsigned short sem_num;  /* semaphore number */
+           short          sem_op;   /* semaphore operation */
+           short          sem_flg;  /* operation flags */
+    sem_num字段标识除了在集合中的哪个信号量上执行操作
+    1.如果sem_op大于0,那么就将sem_op的值加到信号量值上,其结果是其他等待减小信号量值的进程可能会被唤醒并执行它们的操作.调用进程必须要具备在信号量上的修改(写)权限
+    2.如果sem_op等于0,那么就对信号量值进行检查以确定它当前是否等于0.如果等于0,那么操作立即结束,否则semop()就会阻塞知道信号量值变为0位置.调用进程必须要具备在信号量上的读权限
+    3.如果sem_op小于0,那么就将信号量值减去sem_op.如果信号量的当前值大于或等于sem_op的绝对值,那么操作会立即结束.否则semop()会阻塞直到信号量增长到在执行操作之后不会导致出现负值的情况为止.调用进程必须要具备在信号量上的修改权限
+
+	当semop()调用阻塞时,进程会保持阻塞直到发生下列情况为止
+	1.另一个进程修改了信号量的值使得执行的操作能够继续向前
+	2.一个信号终端了semop()调用.发生这个情况会返回EINTR错误(这个semop操作被信号中断,不管有没有指定SA_RESTART标志,都不会自动重启调用)
+	3.另一个进程删除了semid引用的信号量.发生这种情况时semop()会返回EIDRM错误
+	
+	在特定信号量上执行一个操作时可以通过在相应的sem_flg字段中指定IPC_NOWAIT标记来防止semop()阻塞.此时semop()本来发生阻塞的话就立即返回EAGAIN错误
+	
+	尽管通常一次只会操作一个信号量.但也可以通过一个semop()调用在一个集合中的多个信号量上执行操作.这里需要指出的关键一点是这组操作的执行是原子性的,即semop()要么立即执行所有的操作,要么就阻塞直到同时执行所有操作
+	
+使用semop（）在多个system V 信号量上执行操作
+	struct sembuf sops[3];
+	sops[0].sem_num = 0;
+	sops[0].sem_op = -1;
+	sops[0].sem_flg = 0;
+	
+	sops[1].sem_num = 1;
+	sops[1].sem_op = 2;
+	sops[1].sem_flg = 0;
+	
+	sops[2].sem_num = 2;
+	sops[2].sem_op = 0;
+	sops[2].sem_flg = IPC_NOWAIT;
+	if(semop(semid, sops,3 ) == -1){
+		if(errno == EAGAIN)
+			printf("operation would have blocked\n");
+		else
+			errExit("semop");
+	}
+	这个程序演示了如何使用semop()在一个集合中的三个信号量上执行操作．根据信号量的当前值不通，在信号量０和２之上的操作可能无法立即往前执行．如果无法立即执行在信号量０上的操作，那么所有请求的操作都不会执行，semop会被阻塞／
+	另一方面，如果可以立即执行在信号量０上的操作，但无法立即执行在信号量２上的操作，那么－－－由于指定了IPC_NOWAIT标记－－所有请求的操作都不会被执行，并且semop()会立即返回错误EAGAIN
+	
+	semtimedop()系统调用与semop()执行的任务一样，但它多了一个timeout参数，通过这个参数可以指定调用所阻塞的时间上限
+	#define _GNU_SOURCE
+	#include <sys/types.h>
+	#include <sys/ipc.h>
+	#include <sys/sem.h>
+    int semtimedop(int semid, struct sembuf *sops, size_t nsops,
+                      const struct timespec *timeout);
+    如果在信号量操作完成之前所等待的时间已经操作了规定的时间间隔，那么semtimedop()会返回EAGAIN错误.如果将timeout参数指定为null,那么这个函数和semop的含义完全一样  
+    
+多个阻塞信号量操作的处理
+	如果多个因信号量而发生阻塞的进程对改信号量减去的值是一样的，那么当条件允许时到底哪个进程会首先被允许执行操作是不确定的
+	另一方面，如果多个因减小一个信号量值而发生阻塞的进程对该信号减去的值是不同的，那么会按照先满足条件先服务的循序来进行．假设一个信号量的当前值为０，进程Ａ请求将信号量减去２，然后进程Ｂ请求将信号量减去１．如果第三个进程
+	将信号量值加上了１，那么进程Ｂ首先会被接触阻塞并执行它的操作．即使进程Ａ首先请求在该信号量上执行操作
+		在一个糟糕的应用程序设计中，这种场景可能会导致饿死情况的发生
+	当一个进程因试图在多个信号量上执行操作而发生阻塞时也可能出现饿死的情况．考虑下面的这些在一组信号量上执行的操作，两个信号量的初始值都为０
+		１．进程Ａ请求将信号量０和１的值减去１（阻塞）
+		2.进程Ｂ请求将信号量０的值减去１（阻塞）
+		３．进程ｃ将信号量０的值加上１
+		此刻，进程Ｂ接触阻塞并完成它的情趣，及时它发出请求的时间要晚于进程Ａ．同样，也可以设计出一个让进程Ａ饿死的同时让其他进程调整和阻塞与单个信号量的场景
+
+信号量撤销值
+	假设一个进程在调整完一个信号量值（如减小信号量值使之等于０）之后终止了，不管是有意终止还是意外终止．在默认情况下，信号量值将不会发生变化．这样就可能会给其他使用这个信号量的进程带来问题，因为它们可能因等待这个信号量而被阻塞着－－即等待已经被终止的进程撤销对信号量所做的变更
+	为了避免这种问题的发生，在通过semop()修改一个信号量值时可以使用SEM_UNDO标记．当指定这个标记，内核会记录信号量操作的效果，然后在进程终止时撤销这个操作．不管进程是正常终止还是非正常终止，撤销操作都会发生
+	内核无需为所有使用SEM_UNDO的操作都保存一份记录．只需记录一个进程在一个信号量上使用SEM_UNDO操作所做出的调整总和即可．它是一个被称为semadj（信号量调整）的整数．当进程终止之后，所有需要做的就是从信号量的当前值上减去这个总和
+	
+	从linux2.6开始，当指定了CLONE_SYSVSEM标记之后使用使用clone()创建的进程（线程）会共享semadj值．之所以这样做是为了与POSIX线程的实现保持一直．NPTL线程实现在pthread_create()的实现中使用了CLONE_SYSVSEM
+	当使用semctl()SETVAL或SETALL操作设置一个信号量值时，所有使用这个信号量的进程中相应的semadj会被清空（即设置为０）．这样做是合理的．因为直接设置一个信号量的值会破坏与asemadj中维护的历史记录相关的信息
+	
+	通过fork()创建的子进程不会继承父进程semadj值，因为对于子进程来讲撤销其父继承的信号量操作毫无意义．另一方面，semadj值会在exec()中得到保留．这样就能在使用SEM_UNDO调整一个信号量之后通过exec()执行一个不操作该信号量的程序，同事在进程终止时原子地调整该信号量（这项技术允许另一个进程发现这个进程何时终止）
+	
+SEM_UNDO的限制
+	修改一个信号量通常对应于请求或释放一些共享资源，因此仅仅使用SEM_UNDO可能不足以允许一个多进程应用程序在一个进程异常终止时恢复．除非进程终止会原子地将共享资源的状态返回一个一致状态（在很多情况下是不可能的），否则侧小一个信号量操作可能不足以允许应用程序恢复
+	第二个影响SEM_UNDO的实用性的因素是在一些情况下，当进程终止是无法对信号量进行调整．
+		１．进程Ａ将信号量增加２，并为该操作制定了SEM_UNDO标志
+		２．进程Ｂ将信号量值减去１，因此信号量现在的值将变为１
+		３．进程Ａ终止
+	此时就无法完全撤销进程Ａ在第一步中的操作中所产生的效果，因为信号量的值太小了，解决这个问题的潜在方案有三种
+		1.强制进程阻塞知道能够完成信号量调整
+		2.尽可能地减小信号量的值（即减到０）并退出
+		３．退出不执行任何信号量的调整
+		第一个方案是不可行的，因为它可能会导致一个即将终止的进程永久的阻塞．Ｌｉｎｕｘ采用第二中方案．其他一些unix实现采用了第三种方案
+	试图将一个信号量值提升到其许可的最大值32767(SEMVMX限制)的撤销操作也会导致异常行为终止．在这种情况下，内核总是会执行这个调整，从而（非法地）导致信号量的值大于SEMVMX
+
+信号量限制
+	SEMAEM:在semadj综合中能够记录的最大值．SEMAEM的值与SEMVMX一样
+	SEMMNI         32768
+	SEMMSL  一个信号量集中能分配的信号量的最大数量（semget(),EINVAL）   65536
+	SEMMNS              2147483647
+	SEMOPM:每个semop调用能够执行的操作的最大数量（semop()，E2BIG）
+	SEMVMX:一个信号量能取的最大值（semop()，ERANGE）
+	SEMMNU
+	SEMUME:每个信号量撤销结构中撤销条目的最大数量 -> /proc/sys/kernel/sem
+	cat /proc/sys/kernel/sem
+	32000	1024000000	500	32000
+	SEMMSL	SEMMNS		SEMOPM	SEMMNI
+	
+	可以使用IPC_INFO标志获取一些sem的信息
+SYSTEMV信号量的缺点
+	1.信号量是通过标识符而不是大多是unix io 和ipc所采用的文件描述符来引用的
+	2.使用键而不是文件名来标识信号量增加了额外的编程复杂度
+	3.创建和初始化信号量需要使用单独的系统调用以为着在一些情况下必须要做一些额外的编程工作来防止在初始化一个信号量时出现竞争条件
+	4.内核不会维护引用一个信号量的进程数量．这就给确定何时删除一个信号量集增加了难度并且难以确保一个不再会用的信号量集会被删除
+	5.system v提供的编程过于复杂
+	６．信号量的操作存在诸多限制
+	不管怎样，与消息队列所面临的情况不通，替代system v信号量的方案不多，其结果是在很多情况下都必须要使用到他们．信号量的一个替代方案是记录锁．此外在内核2.6以及以后的版本开始，linux支持使用posix　信号量来进行进程同步
+	
+
+
+	
