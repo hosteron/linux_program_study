@@ -1,0 +1,163 @@
+为了使用一个共享内存段通常需要执行下面的步骤
+	1.调用shmget()创建一个新共享内存段或取得一个既有共享内存段的标识符(即由其他进程创建的共享内存段).这个调用将返回后续调用中需要用到的共享内存标识符
+	2.使用shmat()来附加上共享内存段,即使该段称为调用进程的虚拟内存的一部分
+	3.此刻在程序中可以像对待其他可用内存那样对待这个共享内存.为了引用这块共享内存,程序需要使用shmat()调用返回的addr值,它是一个指向进程的虚拟地址空间中该共享内存段的起点的指针
+	4.调用shmdt()来分离共享内存段.在这个调用之后,进程就无法再引用这块共享内存了,这一步是可选的,并且在进程终止时自动完成这一步
+	5.调用shmctl()来删除共享内存段.只有当当前所有附加内存段的进程都与之分离之后内存段才会被销毁,只有一个进程需要执行这个步骤
+
+创建或打开一个共享内存段
+	shmget()系统调用创建一个新共享内存段或获取一个既有段的标识符.新创建的内存段中的内容被初始化为0
+	#include <sys/types.h>
+	#include <sys/shm.h>
+	int shmget(key_t key, size_t size , int shmflg);
+		returns  shared  memory segment identifier on success, or -1 on error;
+	size 是一个正整数,它表示需分配的段的字节数.内核是以系统分页大小的整数倍来分配共享内存的,因此实际上size会被提升到最近的系统分页大小的整数倍.如果使用shmget()来获取一个既有段的标识符,那么size对段不会产生任何效果,但它必须小于或等于段的大小
+	shmflg和其他的那些system ipc 接口一样提供权限检查,还提供下面的标志
+	IPC_CREAT
+	IPC_EXCL
+	SHM_HUGETLB:特权进程能够使用这个标志创建一个使用巨叶的共享内存段.在那些拥有大量内存的系统上并且应用程序需要使用大量内存块时,使用巨页可以降低硬件内存管理单元的超前转换缓冲器(translation look-aside buffer, TLB)中的条目数量.这之所以带来益处是因为TLB目前通常是一种稀缺资源
+	SHM_NORESERVE:和mmap()中MAP_NORESERVE标记起的作用一样
+
+使用共享内存
+	shmat()系统调用将shmid标识的共享内存段附加到进程的虚拟地址空间中
+	#include <sys/types.h>
+	#include <sys/shm.h>
+	void *shmat(int shmid, const void *shmaddr, int shmflg);
+		returns address at which shared memory is attached on success, or (void *)-1 on error;
+	shmaddr参数和shmflg 位掩码参数总SHM_RND位的设置控制着段是如何被附加上去的
+	1.如果shmaddr是NULL,那么段会被附加到内核所选择的一个合适的地址处.这是附加一个段的优选方法
+	2.如果shmaddr 不为NULL并且没有设置SHM_RND,那么段会被附加到由shmaddr指定的地址处,它必须是系统分页大小的一个倍数(否则会发生EINVAL错误)
+	3.如果shmaddr不为NULL,并且设置了SHM_RND,那么段会被映射到的地址为在shmaddr中提供的地址被舍入到最近的常量SHMLBA(shared memory low boundary address) 的倍数.这个常量等于系统分页大小的某个倍数.将一个段附加到值为SHMLBA的倍数的地址处在一些架构上是必要的,因为这样才能提升cpu的快速缓冲性能和防止出现同一个段的不同附加操作在cpu快速缓冲中存在不一致的视图情况
+	
+	为shmaddr指定一个非null值(即上面的第二,第三中情况)不是一种推荐的做法,其原因如下:
+		1.它降低了一个应用程序的可移植性.在一个unix实现上有效的地址在另一个实现上可能是无效的
+		2.试图将一个共享内存段附加到一个正在使用中的特定地址处的操作会失败.例如,当一个应用程序(可能在一个库函数中)已经在该地址处附加了另一个段或创建一个内存映射时就会发生这种情况
+	shmat()的函数结果是返回附加共享内存段的地址
+	
+	要附加一个共享内存段以供只读访问,那么就需要在shmflg中指定SHM_RDNOLY标记.
+	试图更新只读段中的内容会导致段错误(SIGSEGV)的发生.如果没有指定SHM_RDONLY,那么就即可以读取内容也可以修改内存
+	
+	一个进程要附加一个共享内存段就需要在该段就被读和写权限,除非指定了SHM_RDONLY标志,那样的话就只需要具备读取权限
+	在一个进程中可以多次附加同一个共享内存段,即使一个附加操作是只读的而另一个是读写的也没有关系.每个附加点上内存中的内容是一样的.因为进程虚拟内存页表中的不同条目引用的相同的内存物理页面
+	
+	SHM_REMAP.在指定了这个标志之后shmaddr的值必须为非NULL.这个标记要求shmat()调用替换起点在shmaddr处长度为共享内存段的长度的任何既有共享内存段或内存映射.一般来讲,如果试图将一个共享内存段附加到一个已经在用的地址范围时会导致EINVAL错误的发生,SHM_REMAP是一个非标准的linux扩展
+	shmat()的shmflg位掩码
+	SHM_RDONLY		附加只读段
+	SHM_REMAP		替换位于shmaddr处的任意既有映射
+	SHM_RND			将shmaddr四舍五入为SHMLBA字节的倍数
+	
+	当一个进程不再需要访问一个共享内存段时就可以调用shmdt()来将该段分离出其虚拟地址空间了.shmaddr参数表示出了待分离的段,它应该是由之前的shmat()调用返回的一个值
+	#include <sys/types.h>
+	#include <sys/shm.h>
+	int shmdt(const void *shmaddr);
+		returns 0 on success, or -1 on error;
+	分离一个共享内存段于删除它是不同的.删除是通过shmctl()IPC_RMID操作来完成的
+	
+	通过fork()创建的子进程会继承其父进程附加的共享内存段,因此,共享内存为父进程和子进程之间的通信提供了一种简单的IPC方法
+	在一个exec()中,所有附加的共享内存段都会被分离.在进程终止之后共享内存段也会被自动分离
+
+附加共享内存段的虚拟地址从0x40000000开始．内存映射和共享库也是被放置在这个区域中的（共享内存映射和内存段默认被放置的位置可能会有些不同，这依赖于内核版本和进程的RLIMIT_STACK资源限制的设置）
+地址0x40000000被定义成了内核常亮TASK_UNMAPPED_BASE.通过将这个常量定义成一个不同的值并且重建内核可以修改这个地址的值
+
+通过linux特有的/proc/PID/maps文件能够看到一个程序映射的共享内存段和共享库的位置
+从内核2.6.14开始，linux还提供了/proc/PID/smaps文件，它给出了有关一个进程中各个映射的内存消耗方面的更多信息
+./svshm_create  -p  102400
+id = 134021175
+./svshm_attach  134021175
+pid= 30986, SHMLBA=4096
+sleeping 5 s
+^Z
+[2]+  Stopped                 ./svshm_attach 134021175
+
+cat /proc/30986/maps
+00400000-00401000 r-xp 00000000 08:07 4867968                            /home/xiang/Documents/learn/chapter48_share_memory/test/svshm_attach  文本段
+00600000-00601000 r--p 00000000 08:07 4867968                            /home/xiang/Documents/learn/chapter48_share_memory/test/svshm_attach  程序中的字符串常量的只读分页
+00601000-00602000 rw-p 00001000 08:07 4867968                            /home/xiang/Documents/learn/chapter48_share_memory/test/svshm_attach  数据段
+013f7000-01418000 rw-p 00000000 00:00 0                                  [heap]
+7fb4d82dc000-7fb4d849c000 r-xp 00000000 08:05 526903                     /lib/x86_64-linux-gnu/libc-2.23.so   共享内存
+7fb4d849c000-7fb4d869c000 ---p 001c0000 08:05 526903                     /lib/x86_64-linux-gnu/libc-2.23.so
+7fb4d869c000-7fb4d86a0000 r--p 001c0000 08:05 526903                     /lib/x86_64-linux-gnu/libc-2.23.so
+7fb4d86a0000-7fb4d86a2000 rw-p 001c4000 08:05 526903                     /lib/x86_64-linux-gnu/libc-2.23.so
+7fb4d86a2000-7fb4d86a6000 rw-p 00000000 00:00 0 
+7fb4d86a6000-7fb4d86cc000 r-xp 00000000 08:05 526915                     /lib/x86_64-linux-gnu/ld-2.23.so      动态链接器
+7fb4d8880000-7fb4d8883000 rw-p 00000000 00:00 0 
+7fb4d88b2000-7fb4d88cb000 rw-s 00000000 00:05 134021175                  /SYSV00000000 (deleted)          sysv共享内存段相关的信息
+7fb4d88cb000-7fb4d88cc000 r--p 00025000 08:05 526915                     /lib/x86_64-linux-gnu/ld-2.23.so
+7fb4d88cc000-7fb4d88cd000 rw-p 00026000 08:05 526915                     /lib/x86_64-linux-gnu/ld-2.23.so
+7fb4d88cd000-7fb4d88ce000 rw-p 00000000 00:00 0 
+7fff9106e000-7fff9108f000 rw-p 00000000 00:00 0                          [stack]                           进程栈
+7fff911be000-7fff911c0000 r--p 00000000 00:00 0                          [vvar]
+7fff911c0000-7fff911c2000 r-xp 00000000 00:00 0                          [vdso]       linux-gate虚拟动态共享对象（DSO）的一个条目
+ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0                  [vsyscall]
+下面是对/proc/PID/maps文件中每行所包含的列，其循序是从左到右
+１．一对用连字符隔开的数字，它们分别表示内存段被映射到的虚拟地址范围（以１６进制表示）和段结尾之后第一个字节的地址
+２．内存段的保护位和标记位．前三个字母表示段的保护位：读，写以及执行．使用-来代替其中任意字母表示禁用相应的保护位．最后一个字母表示内存段的映射标记，其取值要么是私有（ｐ），要么是共享（ｓ）
+	有关这些标记的详细解释可以参考49.2节中MAP_PRIVATE和MAP_SHARED标记的描述(system v共享内存段总是被标记为共享)
+３．段在对应的映射文件中的１６进制偏移量（以字节计数）．这个列以及随后的两列的含义在第４９章中介绍mmap()系统调用时会变得更加清晰．对于system V共享内存段来说，偏移量总是０
+４．相应的映射文件所位于的设备的设备号（主要和次要ＩＤ）
+５．映射文件的i-node号或system V 共享内存段的标识符
+6.与这个内存段相关联的文件名或其他标识符．对于system V 共享内存段来讲，这一列由字符串SYSV后面接上这个端的shmget()键（以１６进制表示）IPC_PRIVATE表示０．system V共享内存端的SYSV字段后的字符串＂deleted＂是共享内存段实现的产物
+	这种段会被创建成不可见的tmpfs文件系统中的映射文件，然后再被解除链接．共享匿名内存映射也是采用相同的方式实现的
+
+在共享内存中存储指针
+	在共享内存段中存储指向段中其他地址的引用时应该使用偏移量，而不是（绝对）指针
+
+共享内存控制操作
+	#include <sys/types.h>
+	#include <sys/shm.h>
+	int shmctl(int shmid, int cmd, struct shmid_ds *buf);
+		returns  0 on success, or -1 on error;
+	cmd参数规定了待执行的控制操作,buf参数是IPC_STAT,IPC_SET操作会用到的,并且在执行其他操作时需要将这个参数指定为NULL
+	
+	IPC_RMID:标记这个共享内存段及其关联shmid_ds数据结构以便删除.如果当前没有进程附加该段,那么就会执行删除操作,否则就在所有进程都已经与该段分离(即当shmid_ds数据结构中shm_nattch字段的值为0时)之后再执行删除操作
+		在linux上,如果已经使用IPC_RMID将一个共享段标记为删除,但因为还存在一些进程仍然附加了该段而没有删除该段,那么其他进程还能够附加该段.但是这种行为是不可移植的;大多数unix实现会阻止将被标记为删除的段附加到自己的地址空间中
+	
+	IPC_STAT:获取shmid_ds结构体
+	IPC_SET:更新shmid_ds数据结构
+	
+加锁和解锁共享内存
+	一个共享内存段被锁进ram中,这样它就永远不会被交换出去.这种做法能够带来性能上的提升,因为一旦段中的所有分页都驻留在内存中,就能够确保一个应用程序在访问分页时永远不会繁盛分页故障而被延迟.通过shmctl可以完成两种锁操作
+	1.SHM_LOCK操作将一个共享内存段锁进内存
+	2.SHM_UNLOCK操作为共享内存段解锁以允许它被交换出去
+	SUSv3没有规定这些操作,并且所有unix实现也都没有提供这些操作
+	在版本小于2.6.10的linux上只有特权进程才能够将一个共享内存段锁进内存.自linux2.6.10开始,非特权进程能够在一个共享内存段上执行加锁和解锁操作,其前提是进程的有效用户ID与段的所有者或创建者的用户ID匹配并且(在执行SHM_LOCK操作的情况下)进程具备足够高的RLIMIT_MEMLOCK资源限制
+	锁住一个共享内存段无法确保在shmctl()调用结束时段的所有分页都驻留在内存中.非驻留分页会在附加该共享内存段的进程引用这些分页时因分页故障而一个一个地被锁进内存
+	一旦分页因分页故障而被锁进内存,那么分页就会一直驻留在内存中直到被解锁为止,即使所有进程都与该段分离之后也不会发生改变(换句话说,SHM_LOCK操作为共享内存段设置了一个属性,而不是为调用进程设置了一个属性)
+	因分页故障而加载进程内存表示当进程引用了一个非驻留页面时会发生一个分页故障.
+		这时如果分页在交换区中,那么它将会被重新加载进程内存.如果分页是首次被引用,那么在交换文件中就不存在对应的分页.因此内核会在物理内存中分配一个新分页并调整进程的页表以及共享内幕才能的簿记数据结构
+	
+	作为给内存加锁的一种代替方法,可以使用mlock(),它的语义与内存加锁稍微有些不同,50.2节对此进行了介绍
+
+共享内存关联数据结构
+	struct shmid_ds {
+               struct ipc_perm shm_perm;    /* Ownership and permissions */ shm_perm.mode字段还有两个只读位掩码标记.其中一个是SHM_DEST(销毁),它表示当所有进程地址空间都与该段分离之后是否将该段标记为删除(IPC_RMID)
+																						一个标记是SHM_LOCKED,它表示是否将段锁进物理内存中
+               size_t          shm_segsz;   /* Size of segment (bytes) */
+               time_t          shm_atime;   /* Last attach time */				段刚被创建时为0,每次调用shmat()都会更新这个字段为当前时间
+               time_t          shm_dtime;   /* Last detach time */				刚被创建时为0,每次shmdt都会更新这个字段为当前时间
+               time_t          shm_ctime;   /* Last change time */				刚创建以及每次成功IPC_SET操作都会更新这个字段为当前时间
+               pid_t           shm_cpid;    /* PID of creator */
+               pid_t           shm_lpid;    /* PID of last shmat(2)/shmdt(2) */
+               shmatt_t        shm_nattch;  /* No. of current attaches */ 		这个字段统计当前附加该段的进程数.在创建时这会将这个字段初始化为0,然后每次成功shmat()调用会递增这个字段的值,每次成功的shmdt()调用会递减这个字段的值
+               ...
+           };
+
+共享内存的限制
+	SHMMNI			32768				shmmni
+	SHMMIN
+	SHMMAX			依赖于可用内存			shmmax
+	SHMALL			依赖于可用内存			shmall
+	SHMSEG
+	cd /proc/sys/kernel
+	cat shmmni
+	4096
+	cat  shmmax
+	33554432
+	cat shmall
+	2097152
+	linux特有的shmctl()IPC_INFO操作返回一个类型为shminfo的结构,它包含了各个共享内存限制的值
+	struct shminfo buf;
+	shmctl(0, IPC_INFO, (struct shmid_ds *)&buf);
+	还有SHM_INFO操作返回一个类型为shm_info结构,它包含了共享内存对象所消耗的实际资源相关的信息
+
+	
