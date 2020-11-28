@@ -1,0 +1,108 @@
+#include <sys/mman.h>
+int mprotect(void *addr,size_t length, int port);
+	returns 0 on success, or -1 on error;
+	其修改起始位置是addr长度为length字节的虚拟内存区域中分页上的保护
+	port参数是一个位掩码,其取值为PROT_NONE,PROT_READ, PROT_WRITE, PROT_EXEC
+	如果一个进程在访问一块内存区域时违背了内存保护,那么内核就会向改进程发送一个SIGSEGV信号
+	
+内存锁
+	在一些应用程序中将一个进程的虚拟内存的部分或全部锁进内存以确保它们总是位于物理内存是非常有用的.之所以需要这样做的一个原因是它可以提高性能.对被锁住的分页的访问可以确保永远不会因为页面故障而发生延迟.这对于需要确保快速相应时间的应用程序来讲是很有用的
+	给内存加锁的另一个原因是安全.如果一个包含敏感数据的虚拟内存分页永远不会被交换出去,那么该分页的副本就不会被写入到磁盘
+	
+RLIMIT_MEMLOCK资源限制
+	在linux2.6.9之前,只有特权进程才能给内存加锁,RLIMIT_MEMLOCK软资源限制为一个特权进程能够锁住的字节数设定了一个上限
+	从linux2.6.9开始,内存加锁模型发生了变化,即允许非特权进程给一小段内存进行加锁.这对那些需要将一小部分敏感信息锁进内存以确保这些信息永远不会被写入磁盘上的交换空间的应用程序来讲是非常有用的.
+	这种模型上的变更会导致:
+		1.特权进程能够锁住的内存数量是没有限制的,RLIMIT_MEMLOCK会被忽略
+		2.非特权进程能够锁住的内存数量上限由软限制RLIMIT_MEMLOCK定义
+	软和硬RLIMIT_MEMLOCK限制的默认值都是8个分页.
+	RLIMIT_MEMLOCK限制影响:
+		1.mlock(),mlockall()
+		2.mmap()MAP_LOCKED标记,该标记用来在映射被创建时将内存映射锁进内存
+		3.shmctl()SHM_LOCK,该操作用来给system V 共享内存段加锁
+	由于虚拟内存管理单位是分页,因此内存加锁会应用于整个分页.在执行限制检查时,RLIMIT_MEMLOCK限制会被向下舍入到最近的系统分页大小的整数倍
+	
+	尽管这个资源限制只有一个(软)值,但实际上它定义了两个单独的限制
+		1.对于mlock(),mlockall()以及mmap()MAP_LOCKED操作来讲,RLIMIT_MEMLOCK定义了一个进程级别的限制,它限制了一个进程的虚拟地址空间中能被锁进内存的字节数
+		2.对于shmctl()SHM_LOCK操作,RLIMIT_MEMLOCK定义了一个用户级别的限制,它限制了这个进程的真实用户ID在共享内存段中能够锁住的字节数.
+
+给内存区域加锁
+	#include <sys/mman.h>
+	int lock(void *addr, size_t length);
+	int munlock(void *addr, size_t length);
+		Both returns 0 on success, or -1 on error;
+	mlock()系统调用会锁住调用进程的虚拟地址空间中起始地址为addr长度为length字节的区域中的所有分页
+	假设一个分页大小为4096字节的系统上
+		mlock(2000,4000)调用会将0 到8191之间的字节锁住
+	
+	通过/proc/PID/status文件中的Vmlock条目能够找出一个进程当前已经锁住的内存数量
+	
+	munlock()系统调用执行的是mlock()相反的操作;给一组分页解锁并不能确保它们就不会驻留在内存中了:只有在其他进程请求内存的时候才会从RAM中删除分页
+	除了显式地使用munlock()之外,内存锁在下列情况下会自动删除:
+	1.进程终止
+	2.当被锁住的分页通过munmap()被解除映射时
+	3.当被锁住的分页被使用mmap()MAP_FIXED标记的映射覆盖了
+	
+	内存锁不会被通过fork()创建的子进程继承,也不会在exec()执行期间被保留
+	
+	当多进程共享一组分页时(如MAP_SHARED映射),只要还存在一个进程持有着这些分页上内存锁,那么这些分页就会保持被锁进内存的状态
+	内存锁不在单个进程上叠加.如果一个进程重复地在特定虚拟地址区域上调用mlock(),那么只会建立一个锁,并且只需要通过一个munlock()调用就能够删除这个锁.另一方面,如果使用mmap()将同一组分页(即同样的文件)映射到单个进程中的几个不同的位置,
+	然后分页给所有这些映射加锁,那么这些分页会保持锁进RAM的状态直到所有的映射被解锁为止
+	
+	注意shmctl()SHM_LOCK操作的语义与mlock,mlockall的语义不同
+		1.在SHM_LOCK操作之后,分页只有在因后续引用在发生故障时才会被锁进程内存.与之相反,mlock(),mlockall()调用在返回之前会将所有分页锁进内存
+		2.SHM_LOCK操作会设置共享内存的一个属性,而不是进程属性.(正因为这个原因,/proc/PID/status中 VmLck字段的值并没有包含使用SHM_LOCK锁住的所有附加SystemV共享内存段的大小)
+			这意味着分页一旦因故障被锁进了内存,那么即使所有进程都与这个共享内存分离了,分页还是会保持驻留在内存中的状态.与之相反的是,使用mlock()或(mlockall())锁进内存的区域只有在还存在进程持有该区域上的锁才会保持被锁进内存的状态
+		
+给一个进程占据的所有内存加锁和解锁
+	#include <sys/mman.h>
+	int mlockall(int flags);
+	int munlockall(void);
+		Both return 0 on success, or -1 on error;
+	mlockall()系统调用根据flags位掩码的取值将一个进程虚拟地址空间中当前所有映射的分页或将来所有映射的分页或两者锁进内存
+	MCL_CURRENT
+		将调用进程的虚拟地址空间中当前所有映射的分页锁进内存,包括当前为程序文本段,数据段,内存映射以及栈分配的所有分页.这个标记不会对后续子在进程的虚拟地址空间中分页的分页产生影响;要空着这些分页则必须使用MCL_FUTURE
+	MCL_FUTURE
+		将后续映射进调用进程的虚拟地址空间的所有分页锁紧内存.例如,此类分页可能是通过mmap(),shmat()映射的一个共享内存区域的一部分,或向上增长的堆或向下增长的栈的一部分
+		指定MCL_FUTURE标记的后果是后续的内存分配操作(如mmap(),sbrk(),malloc())可能会失败,或栈增长可能会产生SIGSEGV信号,当然前提是系统已经没有RAM分配给进程或者已经到达了RLIMIT_MEMLOCK资源限制
+		
+	munlockall()系统调用将调用进程的所有分页解锁并撤销之前的mlockall(MCL_FUTURE)调用锁锁产生的结果
+
+确定内存驻留性:mincore()
+	mincore()系统调用是内存加锁系统调用的补充,它报告在一个虚拟地址范围中哪些分页当前驻留在RAM中,因此在访问这些分页时是不会导致分页故障
+	#define _BSD_SOURCE
+	#include <sys/mman.h>
+	int mincore(void *addr, size_t length, unsigned char *vec);
+		returns 0 on success ,or -1 on error;
+	addr中的地址必须是分页对齐,length是向上舍入到系统分页大小的下一个整数倍
+	vec是一个数组,其大小为(length + PAGE_SIZE -1) /PAGE_SIZE字节,每个字节的最低有效位在相应分页驻留在内存中是会被设置
+	mincore()返回的信息在执行调用的时刻与检查vec中的元素的时刻期间可能发生了变化,唯一能够确保保持驻留在内存中的分页是那些通过mlock(), mlockall()锁住的分页
+
+建议后续的内存使用模式:madvise()
+	#include <sys/mman.h>
+
+       int madvise(void *addr, size_t length, int advice);
+				returns   0 on success, or -1 on error;
+   Feature Test Macro Requirements for glibc (see feature_test_macros(7)):
+
+       madvise(): _BSD_SOURCE
+       madvise()系统调用通过通知内存调用进程对起始地址为addr长度为length字节的范围之内分页的可能使用情况来提升应用程序的性能
+       内核可能会使用这种信息来提升在分页之下的文件映射上执行的IO效率
+        MADV_NORMAL
+              No special treatment.  This is the default.
+
+       MADV_RANDOM
+              Expect page references in random order.  (Hence, read ahead may be less useful than normally.)
+
+       MADV_SEQUENTIAL
+              Expect page references in sequential order.  (Hence, pages in the given range can be aggressively read ahead, and may be freed soon after they are accessed.)
+
+       MADV_WILLNEED
+              Expect access in the near future.  (Hence, it might be a good idea to read some pages ahead.)
+
+       MADV_DONTNEED
+              Do not expect access in the near future.  (For the time being, the application is finished with the given range, so the kernel can free resources associated with i
+
+		MADV_DONTNEED:
+			对MAP_PRIVATE区域来讲,映射分页会显式的被丢弃,这意味着所有发生在分页上的变更会丢失.虚拟内存地址范围仍然可以访问,但对各分页的下一个访问将会导致一个页面故障和分页的重新初始化,这种初始化要么使用其映射的文件内存,要么在匿名映射的情况下就使用0来初始化
+			对MAP_SHARED区域来讲,内核在一些情况下可能会丢弃修改过的分页,这取决于系统的架构;但在一些unix实现上,MADV_DONTNEED仅仅是通知内核指定的分页在必要的时候可能被交换出去
