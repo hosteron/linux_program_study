@@ -1,0 +1,27 @@
+接口				消息队列				信号量				共享内存
+头文件			<mqueue.h>			<semaphore.h>		<sys/mman.h>
+对象句柄			mqd_t				sem_t *				int(文件描述符)
+创建/打开			mq_open()			sem_open()			shm_open()+mmap()
+关闭				mq_close()			sem_close()			munmap()
+断开链接			mq_unlink()			sem_unlink()		shm_unlink()
+执行IPC			mq_send()			sem_post(),sem_wait	 在共享区域中的位置上执行操作
+				mq_receive()		sem_getvalue()	
+其他操作			mq_setattr()		sem_init()
+				mq_getattr()		sem_destroy()
+				mq_notify()			
+
+ipc open调用会完成下列两个任务中的一个
+	1.使用给定的名字创建一个新对象,打开该对象并返回该对象的一个句柄
+	2.打开一个既有对象并返回该对象的一个句柄
+	它们都至少接收三个参数:
+			name, oflag, 以及mode ,如下面shm_open()调用所示
+			fd = shm_open("/mymem", O_CREAT | O_RDWR, S_IRUSR|S_IWUSR);
+			oflag参数至少还包含这些:
+				O_CREAT
+				O_EXCL
+	对于posix消息队列和信号量来讲,存在一个IPC close调用来表明调用进程已经使用完该对象,系统可以释放之前与该对象关联的所有资源了.posix共享内存对象的关闭是通过使用munmap()解除映射来完成的
+	
+	ipc对象在进程终止或执行exec()时会自动被关闭
+	
+	posix ipc和文件一样,内核会维护对象上的打开引用计数
+	每个ipc对象都有一个对应的unlink调用
