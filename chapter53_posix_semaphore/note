@@ -1,0 +1,160 @@
+有两种类型的posix信号量
+	1.命名信号量:
+		这种信号量拥有一个名字.通过使用相同的名字调用sem_open(),不相关的进程能够访问同一个信号量
+	2.未命名信号量:
+		这种信号量没有名字,相反,它位于内存中一个预先商定的位置处
+			未命名信号量可以在进程之间或一组线程之间共享.当在进程共享时,信号量必须位于一个共享内存区域中(System, posix或mmap).当在线程之间共享时,信号量可以位于被这些线程共享的一块内存区域中(如在堆上或在一个全局变量中)
+	posix信号量的运作方式和system V 信号量类似,即posix信号量是一个整数,其值是不能小于0的.如果一个进程试图将一个信号量减小到小于0,那么取决于所使用的函数,调用会阻塞或返回一个表明当前无法执行相应操作的错误
+	
+	一些系统并没有完整地实现posix信号量,一个典型的约束是只支持未命名线程共享的信号量.在linux2.4上也相同的情况;只有在linux2.6以及待NPTL的glibc上,完整的posix信号量才可用
+
+命名信号量
+	1.sem_open()函数打开或创建一个信号量并返回一个句柄以供后续调用使用,如果这个调用会创建信号量的话还会对所创建的信号量进行初始化
+	2.sem_post(),sem_wait()函数分别递增和递减一个信号量值
+	3.sem_getvalue()函数获取一个信号量的当前值
+	4.sem_close()函数删除调用进程与它之前打开的信号量之间的关系
+	5.sem_unlink()函数删除一个信号量名字并将其标记为所有进行关闭该信号量时删除该信号量
+
+	在linux上,命名信号量被创建成小型posix共享内存对象,其名字的形式为sem.name,这些对象被放在一个挂载在/dev/shm目录之下的专用tmpfs文件系统中.这个文件系统具有内核持久性--它所包含的信号量对象将会持久,即使当前没有进程打开它们,如果系统被关闭的话,这些对象就会消失
+	在linux上从内核2.6开始支持命名信号量
+	 #include <fcntl.h>           /* For O_* constants */
+       #include <sys/stat.h>        /* For mode constants */
+       #include <semaphore.h>
+
+       sem_t *sem_open(const char *name, int oflag);
+       sem_t *sem_open(const char *name, int oflag,
+                       mode_t mode, unsigned int value);
+
+       Link with -pthread.
+
+	returns pointer to semaphore on success, or SEM_FAILED on error;
+
+	mode:
+		很多实现并没有为oflag规定任何访问模式标记(O_RDONLY,O_WRONLY,O_RDWR).很多实现包括linux,在打开一个信号量时会将访问模式默认为O_RDWR,因为大多数使用信号量的应用程序都会同时用到sem_post(),sem_wait();mode为根据进程umask来设置各个属主,组,other的权限
+	value:
+		是对信号量的初始化.是一个无符号的整数
+	
+	当在sem_open()返回值指向的sem_t变量的副本上执行操作(sem_post(),sem_wait()等)时结果是未定义的.换句话说,如下做法是不对的(对sem2的操作是不对的)
+	sem_t *sp, sem2;
+	sp = sem_open(...);
+	sem2 = *sp;
+	sem_wait(&sem2);
+
+关闭一个信号量
+	当一个进程打开一个命名信号量时,系统会记录进程与信号量之间的关联关系.sem_close()函数会终止这种关联关系(即关闭信号量),释放系统为改进程关联到该信号量之上的所有资源,并递减引用该信号量的进程数
+	 #include <semaphore.h>
+
+       int sem_close(sem_t *sem);
+
+       Link with -pthread.
+	returns 0 on success, or -1 on error;
+
+   打开的命名信号量在进程终止或进程执行exec()时会自动被关闭
+   关闭一个信号量并不会删除这个信号量,而要删除信号量需要使用sem_unlink()
+   
+删除一个命名信号领
+	#include <semaphore.h>
+
+       int sem_unlink(const char *name);
+
+       Link with -pthread.
+	returns 0 on success  ,or -1 on error;
+
+信号量操作
+	posix信号量并没有提供一个wait-for-zero的操作(将sops.sem_op字段指定为0的semop()调用)
+	等待一个信号量
+	  #include <semaphore.h>
+
+       int sem_wait(sem_t *sem);
+
+       int sem_trywait(sem_t *sem); //如果递减不能立即执行,那么sem_trywait()就会失败并返回EAGAIN错误
+
+       int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout); //abs_timeout它是自新纪元到现在为止的秒数和纳秒数的绝对值,如果要使用相对值,先通过clock_gettime()CLOCK_REALTIME来获取当前时间+相对时间
+
+       Link with -pthread.
+     returns 0 on success, or -1 on error;
+     在linux中不管在sigaction中是否采用了SA_RESTARTB标记,其被中断了,都不会自动重启
+	发布一个信号量
+		#include <semaphore.h>
+
+       int sem_post(sem_t *sem);
+
+       Link with -pthread.
+		returns  0 on success, or -1 on error;
+	如果在sem_post()之前信号量的值为0,并由好几个线程或进程等待这个信号量而阻塞,它们都是采用的循环时间分享策略,那么哪个进程被唤醒并允许递减这个信号量是不确定的,这个和System V 信号量
+	SUSv3规定如果进程或线程执行在实时调度策略下,那么优先级最高等待时间最长的进程或线程将会被唤醒
+	
+获取信号量的当前值
+	 #include <semaphore.h>
+
+       int sem_getvalue(sem_t *sem, int *sval);
+
+       Link with -pthread.
+       returns 0 on success, or -1 on error;
+     在linux中sval值不会小于0,信号量最小的值为0,但是在一些实现上sval可以小于0,这可以反应出来有多少个实体在等待这个信号量,
+     注意:
+		在sem_getvalue()返回时,sval中的返回值可能已经过时了
+
+未命名信号量
+	其又被称为基于内存的信号量,是类型为sem_t 并存储在应用程序分配的内存中的变量.通过将这个信号量放在几个进程或线程共享的内存区域中就能够使这个信号量对这些进程或线程可用
+	
+	操作未命名信号量和命名信号量的函数一样,sem_wait(),sem_post(),sem_getvalue()
+	
+	不是初始化和销毁函数不一样
+	sem_init()函数对信号量进程初始化并通知系统该信号量会在进程间共享还是在单个进程中的线程共享
+	sem_destroy(sem)函数销毁一个信号量
+	这两个函数不应该应用到命名信号量上
+
+  未命名和命名信号量对比
+  使用未命名信号量之后就无需为信号量创建一个名字了,这种做法在下列情况下比较有用:
+	1.在线程间共享的信号量不需要名字.将一个未命名信号量作为一个共享(全局或堆上的)变量自动会使之对所有线程可访问
+	2.在相关进程间共享的信号量不需要名字.如果一个父进程在一块共享内存区域章(如一个共享匿名映射)分配一个未命名信号量,那么作为fork()操作的一部分,子进程会自动继承这个映射,从而继承这个信号量
+	3.如果正在构建的是一个动态数据结构(如二叉树),并且其中每个项都需要关联的信号量,那么最简单的做法是在每一项中都分配一个未命令信号量.为每一项打开一个命令信号量需要为如何生成每项中的信号量名字(唯一的)和管理这些名字设计一个规则
+
+初始化一个未命名信号量
+	 #include <semaphore.h>
+
+       int sem_init(sem_t *sem, int pshared, unsigned int value);
+
+       Link with -pthread.
+       returns 0 on success, or -1 on error;
+       
+      pshared == 0 -> 进程中线程间进行共享,其具备进程持久性
+      pshared != 0 ->进程间共享(sem 必须是共享内存区域, posix, system v共享内存,或mmap()创建的共享映射),信号量的持久性和它所在的共享内存的持久性一致,通过其中大部分技术创建的共享内存区域具备内核持久性.但共享匿名映射是一个例外,只要由一个进程维持着这种映射,那么它就一直存在下去
+      
+      只所以需要pshared参数是因为下列原因
+      1.一些实现不支持进程间共享的信号量
+      2.在同时支持进程间共享信号量和线程间共享信号量的实现上,指定采用何种共享方式是必要的
+      Susv3规定sem_init()失败时返回-1, 成功时的返回值未进行规定,在linux中是0表示成功
+      
+      未命名信号量不存在相关的权限设置(即sem_init()中并不存在sem_open()中所需的mode参数).对一个未命名信号量的访问将由进程在底层共享内存区域上的权限来控制
+      
+      SUSV3规定对一个已初始化的未命名信号量进行初始化将会导致未定义的行为.换句话说,必须要将应用程序设置成只有一个进程或线程来调用sem_init()以初始化一个信号量
+      和命名信号量一样,SUSv3声称在地址通过传入sem_init()的sem参数指定的sem_t 变量的副本上执行操作的结果是未定义的
+
+销毁一个未命名信号量
+	sem_destroy()函数将销毁信号量sem,其中sem必须是一个之前使用sem_init()进行初始化的未命名信号量.只有在不存在进程或线程在等待一个信号量时才能够安全销毁这个信号量
+	 #include <semaphore.h>
+
+       int sem_destroy(sem_t *sem);
+
+       Link with -pthread.
+		returns 0 on success, or -1 on error;
+	一个未命名信号量应该在其底层的内存被释放之前被销毁
+	在一些实现上,省略sem_destroy()调用不会导致问题的发生,但在其他实现上,不调用sem_destroy()会导致资源泄露
+	
+posix信号量与system V信号量的比较
+	1.posix信号量接口更简单
+	2.posix命名信号量消除了system V信号量的初始化问题
+	3.将一个posix未命名信号量与动态分配的内存对象关联起来更加简单:只需要将信号量嵌入到对象中即可
+	4.在高频繁地争夺信号量场景中,posix和system V信号量的性能上差不多;但是在低频的场景中,posix信号量的性能要比system V信号量要好得多,posix在这种场景中之所以能够做的更好是因为它们的实现方式只有在发生争夺的时候才需要执行系统调用,而system V信号量不管是否发生争夺都需要执行系统调用
+	也有劣势
+		移植性差
+		posix信号量不支持撤销特性
+posix信号量和pthreads互斥体对比
+	性能相近,而互斥体是首选方法,其能保证有良好的结构性(信号量有时候又被称为并发式的"goto")
+	互斥体不是异步信号安全的,但是posix信号量sem_post是异步信号安全的;但是处理异步信号的首选方法是使用sigwaitinfo()(或类似的函数)来接收这些信号,而不是使用信号处理函数,所以在这个场景下还是使用互斥体比较好
+
+
+信号量的限制
+	可以参考书上所说
