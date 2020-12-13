@@ -1,0 +1,27 @@
+	posix共享内存能够让无关进程共享一个映射区域而无需创建一个相应的文件,linux从内核2.4开始支持posix共享内存
+	linux使用挂载与/dev/shm目录下的专用tmpfs文件系统;这个文件系统具有内核持久性
+	超级用户能够通过使用命令mount -o remount,size=<num-bytes>重新挂载这个文件系统来修改它的大小
+	
+使用posix共享内存
+	1.使用shm_open()打开或新建指定名字对应的对象,返回一个文件描述符
+	2.将上一步获得的文件描述符传入mmap()调用并在其flags参数中指定MAP_SHARED.这会将共享内存对象映射进进程的虚拟地址空间.与mmap()的其他用法一样,一旦映射了对象之后就能够关闭该文件描述符而不会影响到这个映射.当然也可以保持其打开
+	#include <sys/mman.h>
+       #include <sys/stat.h>        /* For mode constants */
+       #include <fcntl.h>           /* For O_* constants */
+
+       int shm_open(const char *name, int oflag, mode_t mode);
+			returns  file descriptor on  success, or -1 on error;
+       int shm_unlink(const char *name);
+			returns 0 on success, or -1 on error
+       Link with -lrt.
+     在linux上O_TRUNC会导致在成功打开一个既有共享内存对象之后将对象的长度截断为0.如果其在只读打开时指定O_TRUNC,也会被截断,不过SUSv3规定这个在只读时O_TRUNC是未定义的
+     shm_open()返回的文件描述符会设置close-on-exec标记(FD_CLOEXEC),因此当程序执行了一个exec()时文件描述符会自动关闭(这与执行exec()时映射会被解除的事实是一致的)
+     
+     一个新共享内存对象被创建时其初始长度会被设置为0.这意味着在创建完一个新共享内存对象之后通常在调用mmap()之前需要使用ftruncate()来设置对象的长度.在调用完mmap()之后可能还需要使用ftrucate()来根据需求扩大或收缩共享内存对象
+     在扩展一个共享内存对象时,新增加的字节会自动被初始化为0
+     在任何时候都可以在shm_open()返回的文件描述符上使用fstat()以获取stat结构
+     使用fchmod()和fchown()能够分别修改共享内存对象的权限和所有权
+     
+删除共享内存对象
+	shm_unlink
+	删除一个共享内存对象不会影响对象的既有映射(它会保持有效直到相应的进程调用munmap()或终止),但会阻止后续的shm_open()调用打开这个对象.一旦所有进程都解除映射这个对象.对象就会被删除,其中内容会被丢失
