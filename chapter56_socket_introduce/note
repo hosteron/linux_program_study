@@ -1,0 +1,133 @@
+通信domain,它确定:
+	1.识别出一个socket的方法(即socket"地址"的格式)
+	2.通信范围
+	现代操作系统至少支持下列domain
+	1.UNIX(AF_UNIX)domain		内核中			同一主机						路径名					sockaddr_un
+	2.IPv4(AF_INET)				通过ipv4			通过ipv4网络连接起来的主机		32位IPv4地址+16端口号		sockaddr_in	
+	3.IPv6(AF_INET6)			通过IPv6			通过IPv6网络连接起来的主机		128位IPv6地址+16端口号	sockaddr_in6
+	AF表示"地址族",PF表示"协议族"
+	
+	socket类型
+	属性						socket类型
+					流					数据报
+	可靠地传递		是					否
+	消息边界保留		否					是
+	面向连接			是					否
+	
+	对等socket是指连接另一端的socket,"对等地址"表示该socket的地址,"对等应用程序"表示利用这个对等的socket的应用程序.一个流socket只能与一个对等socket进行连接
+	数据报socket(SOCK_DGRAM)允许数据以被称为数据报的消息的形式进行交换.在数据报中,消息边界得到了保留,但数据传输是不可靠的.消息的到达可能是无序的,重复的或者根本就无法到达
+
+socket系统调用
+	1.socket()
+	2.bind()
+	3.listen()
+	4.accept()
+	5.connect()
+	在linux中可以通过ioctl(fd, FIONREAD,&cnt)来获取文件描述符fd引用的流socket中可用的未读字节数;对于数据报socket来讲,这个操作会返回下一个未读数据报中的字节数(如果下一个数据报的长度为0的话就返回0)或在没有未决数据报的情况下返回0
+
+socket()
+	#include <sys/socket.h>
+	int socket(int domain, int type, int protocol)
+		returns file descriptor on success, or -1 on error;
+		其中type还可以取值SOCK_CLOEXEC,SOCK_NONBLOCK
+
+bind()
+	#include <sys/socket.h>
+	int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+		returns 0 on success, or -1 on error;
+
+通用socket地址结构: struct sockaddr
+	struct sockaddr{
+		sa_family_t sa_family;
+		char sa_data[14];
+	}
+	这个结构是所有domain特定的地址结构的模板,其中每个地址结构均以与sockaddr结构中sa_family字段对于的family字段开头.通过family字段的值足以确定存储在这个结构的剩余部分中的地址的大小和格式了
+
+流socket
+	流socket的运作和电话系统类似
+	1.socket()系统调用会创建一个socket,这等价于安装一个电话.为使两个应用程序能够通信,每个应用程序必须要创建一个socket
+	2.通过一个流socket通信类似于一个电话.一个应用程序在进行通信之前必须要将socket连接到另一个应用程序的socket上.两个socket的连接过程如下
+		a.一个应用程序调用bind()以将socket绑定到一个总所周知的地址上,然后调用listen()通知内核它所接收接入连接的意愿.这一步类似于已经一个为众人所知的电话号码并确保打开了电话,这样人们就可以打电话了
+		b.其他应用程序通过调用connect()建立连接,同时指定需要连接的socket地址.这类似于拨某人的电话号码
+		c.调用listen()的应用程序使用accept()接收连接.这类似于在电话想起时拿起电话.如果在对等应用程序调用connect()之前执行了accept(),那么accept()就会阻塞("等待电话")
+	3.一旦建立了连接之后就可以在应用程序之间(类似于两路电话会话)进行双向数据传输直到其中一个使用close()关闭连接为止.通信是通过传统的read(),write().或者一些send(),recv()来完成
+	
+主动和被动socket
+	在默认情况下,socket()创建的是主动的,主动的可以用connect()建立一个到被动socket()的连接,这种行为叫主动的打开
+	被动的socket()(也被称为监听socket)是一个通过调用listen()以被标记成允许接入的连接的socket().接收一个接入连接通常被称为执行一个被动的打开
+
+监听接入连接:listen()
+	#include <sys/socket.h>
+	int listen(int sockfd, int backlog);
+		returns 0 on success, or -r on error;
+	无法在一个已连接的socket(即已经成功connect()的socket或accept()调用返回的socket)执行listen()
+	
+	backlog -> 内核必须要记录所有未决的连接请求的相关信息,其允许限制这种未决连接的数量.在这个限制之内的连接请求会立即成功.其之外的连接请求就会阻塞直到一个未决的连接被接收(通过accept)),并从未决连接队列删除为止
+	SOMAXCONN常量规定了上限
+		可以通过/proc/sys/net/core/somaxconn
+		cat /proc/sys/net/core/somaxconn 
+			128
+
+接收连接:accept()
+	#include <sys/socket.h>
+	int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+		returns  file discriptor on success, or -1 on error;
+	理解accept()的关键点是它会创建一个新socket,并正是这个新socket会与执行connect()的对等socket()进行连接.其返回的函数结果是已连接的socket的文件描述符.监听的socket(sockfd)会保持打开状态,并且可以被用来接收后续的连接
+	剩余的参数会返回对端的socket的地址
+	addrlen是值-结果参数
+	如果不关心对等socket的地址,可以指定addr = null,  addrlen = 0
+	
+	从内核2.6.28开始,linux支持一个新的非标准系统调用accept4().这个系统调用执行的任务与accept()相同,但支持一个额外的参数flags,而这个参数用来改变系统调用的行为.目前系统支持两个标记:SOCK_CLOEXEC,SOCK_NONBLOCK
+		这个两个标记都是作用在accep4()返回的新socket的fd上的
+
+连接到对等socket:connect()
+	#include <sys/socket.h>
+	int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+		returns 0 on success, or -1 on error;
+	如果connnect()失败并且希望重新进行连接,那么SUSv3规定这个任务的可移植的方法是关闭这个socket,创建一个新的socket,在该socket上重新进行连接
+
+连接终止:close()
+	
+数据报socket
+	数据报socket的运作类似于邮政系统
+	1.socket()系统调用等价于创建一个邮箱.所有需要发送和接收数据报的应用程序都需要使用socket()创建一个数据报socket
+	2.为允许另一个应用程序发送其数据报(信),一个应用程序需要使用bind()将其socket绑定到一个总所周知的地址上.
+		一般来讲
+		一个服务器会将其socket绑定到一个总所周知的地址上,而一个客户端会通过向该地址发送一个数据报来发起通信(在一些domain中--特别是unix domain--客户端如果想要接收服务器发送来的数据报的话可能还需要使用bind()将一个地址赋给其socket)
+	3.要发送一个数据报,一个应用程序需要调用sendto().其中一个参数填接受者的地址,类似于将收件人写到信件上并投递这封信
+	4.为了接收数据报,一个应用程序需要调用recvfrom()
+	5.不再需要socket时,close()这个fd
+	
+	#include <sys/types.h>
+       #include <sys/socket.h>
+
+       ssize_t recv(int sockfd, void *buf, size_t len, int flags);
+
+       ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
+                        struct sockaddr *src_addr, socklen_t *addrlen); //这个类似于accept()的addr,addrlen参数
+       returns number of bytes received,0 on EOF,or -1 on error;
+       不管len的值是多少,recvfrom只会接收一个数据报.如果消息的大小操作了len长度,那么消息会被静默地截断为length字节 --- 还有一个recvmsg
+      #include <sys/types.h>
+       #include <sys/socket.h>
+
+       ssize_t send(int sockfd, const void *buf, size_t len, int flags);
+
+       ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
+                      const struct sockaddr *dest_addr, socklen_t addrlen);
+       returns number of bytes send, or -1 on error;
+ 
+在数据报socket上使用connect()
+	尽管数据报socket是无连接的,但在数据报socket上应用connect()系统调用仍然是起作用的,在数据报socket调用connect()会导致内核记录这个socket的对等socket的地址.
+		术语已连接的数据报socket就是指这种socket
+		术语未连接的数据报socket是值那些没有调用connect()的数据报socket(即新数据报的默认行为)
+	当一个数据报已连接之后
+		1.数据报的发送可在socket上使用write(),(send())来完成并且会自动发送到同样的对等的socket上.与sendto()一样,每个write()都会发送一个独立的数据报
+		2.在这个socket上只能读取由对等socket发送的数据报
+		
+	注意connect()的作用对数据报socket是不对称的.上面的论断只适用于调用了connect()数据报socket,并不适用与它连接的远程的socket(除非对等应用程序在其socket上也调用了connect()
+	通过再发起一个connect()调用可以修改一个已连接的数据报socket对等socket
+	此外,通过指定一个地址族(如unix domain中的sun_family字段)为AF_UNSPEC的地址结构还可以解除对等关联关系
+       
+       
+       
+	
