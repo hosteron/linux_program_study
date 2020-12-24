@@ -1,0 +1,48 @@
+ struct sockaddr_un{
+	sa_family_t  sun_family;
+	char sun_path;
+ };
+	当用来绑定unix domain socket时,bind()会在文件系统上创建一个条目.因此作为socket路径名的一部分的目录需要可访问和可写,unix domain socket的第一列将会显示类型s, ls -F 会在socket路径名后面附加上一个=
+	尽管unix domain socket是通过路径名来标识的,但在这些socket上发生的IO无需对底层设备进行操作
+	
+	有关绑定一个unix domain socket方面还需要注意以下几点:
+	1.无法将一个socket绑定到一个既有路径名上(bind()会失败并返回EADDRINUSE错误)
+	2.通常会将一个socket绑定到一个绝对路径名上,这样这个socket就会位于文件系统中的一个固定的地址处.当然也可以使用一个相对路径名,但这种做法不常见
+	3.一个socket只能绑定到一个路径名上,相应的,一个路径名只能被一个socket绑定
+	4.无法使用open()打开一个socket
+	5.当不再需要一个socket是可以使用unlink()(或remove())删除其路径名条目, 通常也应该这么做
+
+
+unix domain中的数据报socket
+	对于unix domain socket 来讲,数据报的传输是在内核中发生的,并且也是可靠的.所有消息会按序被传递并且也不会发生重复的状况
+	
+
+unix domain socket 权限
+	socket 文件的所有权和权限决定了哪些进程能够与这个socket进行通信
+	1.要连接一个unix domain 流socket需要在该socket文件上拥有写权限
+	2.要通过一个unix domain 数据报socket发送一个数据报需要在该socket文件上拥有写权限
+	此外,需要在存放socket路径名上所有的目录上都拥有执行权限(搜索权限)
+	在默认情况下,创建socket(通过bind())时会给所有者(用户),组UI及other用户赋予所有的权限,要改变这种行为可以在调用bind()之前调用umask()来禁用不希望赋予的权限
+	一些系统会忽略socket文件上的权限.因此无法可移植地使用socket文件权限来控制对socket的访问,尽管可以可移植地使用宿主目录上的权限来达到这以目的
+	
+
+创建互联socket对->socketpair()
+	#include <sys/types.h>          /* See NOTES */
+       #include <sys/socket.h>
+
+       int socketpair(int domain, int type, int protocol, int sv[2]);
+		returns 0 on success, or -1 on error;
+	
+	socketpair()只能用在unix domain中, domain 必须= AF_UNIX
+	type 可以是SOCK_DGRAM,SOCK_STREAM, protocol必须是0,sv数组返回两个互相连接的socket的文件描述符
+	使用socketpair()创建一对socket与手工创建一对互相连接的socket这两种做法的一个差别在于socketpair()创建的socket不会被绑定到任意地址上,这样就避免一类安全问题了.因为这一对socket对其他进程不可见
+	
+linux抽象socket名空间
+	其是linux特有的一项特性,它允许将一个unix domain socket绑定到一个名字上但不会在文件系统上创建该名字.这种做法由几点优势
+	1.无需担心与文件系统上的既有名字冲突
+	2.没有必要在使用完socket之后删除socket路径名.当socket关闭之后会自动删除这个抽象名
+	3.无需为socket创建一个文件系统路径名了.这对与chroot环境以及在不具备文件系统上写权限时比较有用
+	
+	要创建一个抽象绑定就需要将sun_path字段的第一个字节指定为null字节(\0).这样就能够将抽象socket名字和传统的unix domain socket路径名区分开来
+	sun_path[1]到结尾都是表示这个抽象名称,并不是由null字节结尾的字符串
+	
