@@ -1,0 +1,305 @@
+	unix domain数据报socket是可靠的,但udp socket则是不可靠的--数据报可能会丢失,重复或到达的循序与它们发送的循序不同
+	在一个unix domain数据报socket上发送数据会在接收socket的数据队列为满时阻塞.与之不同的是,使用udp时如果进入的数据报会使接收者的队列溢出,那么数据报就会静默地丢弃
+网络字节序
+	大端和小端
+	由于端口号和ip地址必须在网络中的所有主机之间传递并且需要被它们所理解,因此必要要由一个标准的字节序.这种字节序被称为网络字节序,它是大端的
+	#include <arpa/inet.h>
+	uint16_t htons(uint16_t host_uint16)
+		returns host_uint16 converted to network byte order
+	uint32_t htonl(uint32_t  host_uint32)
+		returns host_uint32 converted to network byte order
+	uint16_t ntohs(uint16_t net_uint16)
+		returns net_uint16 converted to host byte order
+	uint32_t ntohl(uint32_t net_uint32);
+		returns net_uint32 converted to host byte order
+数据表示
+	最简单的方式是将数据转换成文本格式
+
+	#include <netinet/in.h>
+	struct in_addr{
+		in_addr_t s_addr;
+	};
+	
+	struct sockaddr_in{
+	  sa_family_t sin_family;
+	  in_port_t sin_port;
+	  struct in_addr sin_addr;
+	  unsigned char __pad[X];
+	};
+	
+	struct in6_addr{
+		uint8_t s6_addr[16];
+	};
+	struct sockaddr_in6{
+		sa_family_t sin6_family;
+		in_port_t sin6_port;
+		uint32_t sin6_flowinfo;
+		struct in6_addr sin6_addr;
+		uint32_t sin6_scope_id;
+	};
+	IPv6的通配地址0::0.系统定义了IN6ADDR_ANY_INIT来表示这个地址，具体如下：
+	#define IN6ADDR_ANY_INIT {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}}
+	在变量声明的初始化器中可以使用IN6ADDR_ANY_INIT常量，但无法在一个赋值语句的右边使用这个常量，因为Ｃ语法并不允许在赋值语句中使用一个结构化的常量．取而代之的做法是必须要使用一个预先定义的变量in6addr_any
+	const struct in6_addr in6addr_any = IN6ADDR_ANY_INIT; 变量声明的初始化器
+	可以想下面这样使用通配地址来初始化一个IPv6 socket地址
+	struct sockaddr_in6 addr;
+	memset(&addr, 0, sizeof(struct sockaddr_in6));
+	addr.sin6_family = AF_INET6;
+	addr.sin6_addr = in6addr_any;
+	addr.sin6_port = htons(SOME_PORT_NUM);
+	
+	IPv6环回地址（::1）的对应常量和变量是IN6ADDR_LOOPBACK_INIT和in6addr_loopback
+	
+sockaddr_storage结构
+	在IPv6 socket API中新引入了一个通用的sockaddr_storage结构，这个结构的空间足以存储任意类型的socket地址
+	#define __ss_aligntype uint32_t
+	struct sockaddr_storage{
+		sa_family_t ss_family;
+		__ss_aligntype __ss_align;
+		char __ss_padding[SS_PADSIZE];
+	}
+
+主机和服务转换函数
+	主机地址可以表示为一个二进制值或一个符号主机名或展现格式（IPv4是点分十进制，IPv6是十六进制字符串）
+	端口号可以表示为一个二进制值或一个符号服务名
+	
+	在二进制和人类可读的形式之间转换的IPv4地址
+		inet_aton(), inet_ntoa()函数
+	
+	在二进制和人类可读的形式之间转换IPv4和IPv6地址
+		inet_pton()和inet_ntop()
+		inet_ntop()的一个用途是产生IP地址的一个可打印的表示形式以便记录日志．在这些情况下，最好使用这个函数而不是将一个ＩＰ地址转换（＂解析＂）成主机名，其原因如下：
+			１．将一个ＩＰ地址解析成主机名可能需要向一台DNS服务器发送一个耗时较长的请求
+			２．在一些场景中，可能并不存在一个ＤＮＳ（ＰＴＲ）记录将ＩＰ地址映射到对应的主机名上
+
+	主机和服务名与二进制形式之间的转换(已过时)
+		gethostbyname() －返回与主机名对应的二进制IP地址
+		getservbyname()　－　返回与服务名对应的端口号
+		对应的逆向转换
+			gethostbyaddr()
+			getservbyport()
+	
+	主机和服务名与二进制形式之间的转化（现代的）
+	getaddrinfo()-将主机名和服务名转换成二进制ＩＰ地址和端口号
+	getnameinfo()-　将一个IP地址和端口号转换成对应的主机名和服务名
+		使用getaddrinfo()和getnameinfo()还可以在二进制IP地址与其展现格式之间进行转换
+	
+	dns允许协作服务器维护一个将二进制ＩＰ地址映射到主机名和将主机名映射到二进制ＩＰ地址的分布式数据库
+		诸如DNS之类的系统的存在对于因特网的运转是非常关键的，因为对浩瀚的因特网主机名进行集中管理是不可能的
+	/etc/services文件将端口号映射到符号服务名
+	
+	#include <arpa/inet.h>
+	int inet_pton(int domain, const char *src_str, void *addrptr);                          　　　　－－－－－－　其addrptr应该是指向 struct in_addr,或struct in6_addr结构
+		returns 1 on successful conversion, 0 if src_str is not in presentation format, or -1 on error;  
+	const char *inet_ntop(int domain, const void *addrptr, char *dst_str, size_t len);         ------ 其addrptr应该是指向struct in_addr, 或　struct in6_addr结构
+		returns pointer to dst_ptr on success, or NULL on error;
+	要正确计算dst_str指向的缓冲器的大小可以使用在<netinet/in.h>中定义的两个常量　（包括结尾的null字节）
+		#define INET_ADDRSTRLEN 16
+		#define INET6_ADDRSTRLEN 46
+
+域名系统（DNS）
+	在DNS出现以前，主机名和ＩＰ地址之间的映射关系是在一个手工维护的本地文件/etc/hosts中进行定义的，该文件包含了形如下面的记录
+		#IP-address		canonical hostname		[aliases]
+		127.0.0.1		localhost
+	然而，/etc/hosts模式的扩展性交叉，并且随着网络中主机数量的增长（如因特网中存在着数以亿计的主机），这种方式已经变得不太可行了
+	DNS被设计用来解决这个问题
+		１．将主机名组织在一个层级名空间中．DNS层级中的每一个节点都有一个标签（名字）．该标签最多包含６３个字符．层级的根是一个无名字的节点，即＂匿名节点＂
+		２．一个节点的域名由该节点到根节点的路径中所有节点名字链接链接组成．各个名字之间用（.）分隔．如google.com是节点google的域名
+		3.完全限定域名（fully qualified domain name, FQDN）,如www.kernel.org，标识除了层级中的一台主机．区分一个完全限定域名的方法是看名字是否以点结尾，单很多情况下这个点会被省略
+		４．没有一个组织或系统或管理整个层级．相反，存在一个DNS服务器层级，每台服务器管理树的一个分支（一个区域）．通常．每个区域都有一个主要名字服务器．此外还包含一个或多个从名字服务器，他们在主要名字服务器奔溃时提供备份
+	linux上采用的DNS服务器实现是被广泛使用的（BIND）实现，named，其运作是由/etc/named.conf控制的
+		５．当一个程序调用getaddrinfo()来解析一个域名时，getaddrinfo()会使用一组库函数（resolver库）来与本地的DNS服务器通信
+	
+	ＤＮＳ解析请求可以分为两类：递归和迭代
+		在一个递归请求中，请求者要求服务器处理整个解析任务，包括在必要的时候与其他DNS服务器进行通信的任务．当位于本地主机上的一个应用程序调用getaddinfo()时，该函数会向本地DNS服务器发起一个递归请求，如果本地DNS服务器自己并没有相关信息来完成解析，那么它就会迭代解析这个域名
+	
+	linux上dns服务器
+	nsswitch框架　　
+	 ls /usr/lib/x86_64-linux-gnu/libnss*
+	/usr/lib/x86_64-linux-gnu/libnss3.so        /usr/lib/x86_64-linux-gnu/libnss_files.so    /usr/lib/x86_64-linux-gnu/libnss_nis.so
+	/usr/lib/x86_64-linux-gnu/libnss_compat.so  /usr/lib/x86_64-linux-gnu/libnss_hesiod.so   /usr/lib/x86_64-linux-gnu/libnssutil3.so
+	/usr/lib/x86_64-linux-gnu/libnss_dns.so     /usr/lib/x86_64-linux-gnu/libnss_nisplus.so
+	在nsswitch的配置文件/etc/nsswitch.conf中有这么一行内容：
+	hosts: files dns
+	这里的file指的就是通过libnss_files.so来找/etc/hosts文件通过这个文件来完成主机名称到IP地址的对应关系。这里的dns指的就是DNS服务。当我们去访问一个主机名的时候，主机名是不能建立真正的联系的，它会调用一个库文件来完成从主机名到IP地址的转换，这个完成机制，在我们主机上叫做stub resolver，可翻译成名称解析器，这是一个软件也可以理解为程序	
+	 我们以查询www.redhat.com为例来了解DNS查询的过程，如上图
+		1、本地客户端将www.redhat.com的查询提交给本地DNS服务器，此时采用递归查询方式。
+		2、本地DNS服务器检查区域数据文件，由于此服务器不负责redhat.com的解析，因此，本地DNS服务器将查询传递到根服务器，请求解析主机名称。根服务器把.com服务器IP返回给本地服务器，此时采用的是迭代查询方式。
+		3、本地DNS服务器将请求发给.comDNS服务器，此服务器根据请求将redhat.com的DNS服务器IP地址返回给本地DNS服务器，此时依然是迭代查询。
+		4、本地DNS服务器向redhat.com的DNS服务器发送请求，由于此服务器负责该域名解析，因此将www.redhat.com的IP地址返回给本地DNS服务器。
+		5、本地DNS服务器最终将结果发给本地客户端。
+		
+	使用dig . NS命令可以累出这组根服务器列表
+	可以看一下https://www.cnblogs.com/simon-xm/p/4485016.html文档
+	gethostbyname如果传入一个不完整的域名，那么解析器在解析之间会尝试补偿．补全规则在/etc/resolv.conf中
+		cat /etc/resolv.conf 
+		# Dynamic resolv.conf(5) file for glibc resolver(3) generated by resolvconf(8)
+		#     DO NOT EDIT THIS FILE BY HAND -- YOUR CHANGES WILL BE OVERWRITTEN
+		nameserver 127.0.1.1
+			如果登录机器oghma.otago.ac.nz并输入了命令ssh octavo,得到的DNS查询将会以octavo.otago.ac.nz作为其名字
+		dig -t RT(资源记录类型) NAME [#IP] #当记录类型不同时，其后所跟的名称也不同
+		dig -t NS ZONE_NAME #通过区域名查询
+		dig -x IP：根据IP查找FQDN
+		#在使用该命令时，系统会返回给我们很多信息，我们主要看ANSWER SECTION这个选项的信息，这才是我们想要的答案，其他选项不做介绍
+		dig +norecurse -t A FQDN @HOST #通过host主机不递归查询该FQDN，默认情况使用递归查询
+		dig +trace -t A FQDN @HOST #通过host主机追踪查询该FQDN的查询过程
+
+/etc/services文件
+		getaddrinfo()和getnameinfo()会使用这个文件中的信息在服务名和端口号之间进行转换
+
+独立于协议的主机和服务转换
+	getaddrinfo()，getnameinfo()－－是可重入的
+	#include <sys/types.h>
+   #include <sys/socket.h>
+   #include <netdb.h>
+
+   int getaddrinfo(const char *node, const char *service,
+				   const struct addrinfo *hints,
+				   struct addrinfo **res);
+	returns 0 on success, or nonzero on error
+	 struct addrinfo {
+               int              ai_flags;
+               int              ai_family;　　　AF_INET, AF_INET6
+               int              ai_socktype; SOCK_DGRAM, SOCK_STREAM
+               int              ai_protocol; socket protocol
+               socklen_t        ai_addrlen;  size of structure  pointed to by ai_addr
+               struct sockaddr *ai_addr;    其中的sockaddr 中：　IPv4-> in_addr 　IPv6 -> in6_addr
+               char            *ai_canonname;
+               struct addrinfo *ai_next;
+           };
+     result参数返回一个结构列表而不是单个结构，因为与在host, service以及hints中指定的标准对应的主机和服务组合可能有多个
+		如查询拥有多个网络几口的主机时可能会返回多个地址结构
+		此外，如果将hints.ai_socktype指定了０，那么就可能会返回两个结构－－－一个用于SOCK_DGRAM, 一个用于SOCK_STREAM ---前提是给定的service同时对TCP和UDP可用
+		ai_canonname字段仅由第一个addrinfo结构使用并且其前提是－＞hints.flags = AI_CANONNAME
+	hints参数
+		其只能设置addrinfo结构的ai_flags, ai_family, ai_socktype以及ai_protocol字段
+		ai_family：AF_INET, AF_INET6,如果想要获取所有种类socket地址结构，可以指定为AF_UNSPEC
+		ai_socktype:SOCK_DGRAM, SOCK_STREAM,如果指定为０，任意类型的socket都是可以接受的
+		ai_protocol:　socket协议
+		ai_flags:是一个位掩码
+			AI_ADDRCONFIG:在本地系统上至少配置了一个IPv4地址返回其IPv4地址（非回环地址），IPv6同理
+			AI_CANONNAME
+			AI_NUMERICHOST
+			AI_NUMERICSERV
+			AI_PASSIVE
+			AI_V4MAPPED
+	如果错误：  getaddrinfo的非零返回值
+		EAI_ADDRFAMILY
+              The specified network host does not have any network addresses in the requested address family.
+
+       EAI_AGAIN
+              The name server returned a temporary failure indication.  Try again later.
+
+       EAI_BADFLAGS
+              hints.ai_flags contains invalid flags; or, hints.ai_flags included AI_CANONNAME and name was NULL.
+
+       EAI_FAIL
+              The name server returned a permanent failure indication.
+
+       EAI_FAMILY
+              The requested address family is not supported.
+
+       EAI_MEMORY
+              Out of memory.
+
+       EAI_NODATA
+              The specified network host exists, but does not have any network addresses defined.
+
+       EAI_NONAME
+              The node or service is not known; or both node and service are NULL; or AI_NUMERICSERV was specified in hints.ai_flags and service was not  a  numeric
+              port-number string.
+
+       EAI_SERVICE
+              The requested service is not available for the requested socket type.  It may be available through another socket type.  For example, this error could
+              occur if service was "shell" (a service available only on stream sockets), and either hints.ai_protocol  was  IPPROTO_UDP,  or  hints.ai_socktype  was
+              SOCK_DGRAM;  or  the error could occur if service was not NULL, and hints.ai_socktype was SOCK_RAW (a socket type that does not support the concept of
+              services).
+
+       EAI_SOCKTYPE
+              The requested socket type is not supported.  This could occur, for  example,  if  hints.ai_socktype  and  hints.ai_protocol  are  inconsistent  (e.g.,
+              SOCK_DGRAM and IPPROTO_TCP, respectively).
+
+       EAI_SYSTEM
+              Other system error, check errno for details.
+			
+			
+	void freeaddrinfo(struct addrinfo *res);
+
+       const char *gai_strerror(int errcode);
+                The gai_strerror() function translates these error codes to a human readable string, suitable for error reporting
+ 
+ getnameinfo()函数
+	   #include <sys/socket.h>
+       #include <netdb.h>
+
+       int getnameinfo(const struct sockaddr *sa, socklen_t salen,
+                       char *host, socklen_t hostlen,
+                       char *serv, socklen_t servlen, int flags);
+                       成功时返回０
+        NI_MAXHOST
+        NI_MAXSERV
+       flags取值：
+       NI_DGRAM
+       NI_NAMEREQD
+       NI_NOFQDN
+       NI_NUMERICHOST
+       NI_NUMERICSERV
+       
+ 
+过时的函数
+	#include <arpa/inet.h>
+	int inet_aton(const char *str, struct in_addr *addr)
+		returns 1(true) if str is valid dotted-decimal addree, or 0 (false) on error
+		
+	#include <arpa/inet.h>
+	char *inet_ntoa(struct in_addr addr);
+		returns pointer to (statically allocated) dotted-decimal string version of addr --> 返回的地址是静态分配的地址
+
+	
+	#include <netdb.h>
+	extern  int h_errno;
+	struct hostent * gethostbyname(const char *name);
+	struct hostent * gethostbyaddr(const char *addr, socklen_t len, int type);
+		Both return pointer to (statically allocated) hostent structure on success,  or NULL on error;
+	
+    struct hostent {
+               char  *h_name;            /* official name of host */
+               char **h_aliases;         /* alias list */
+               int    h_addrtype;        /* host address type */
+               int    h_length;          /* length of address */
+               char **h_addr_list;       /* list of addresses */
+           }
+      #define h_addr h_addr_list[0] /* for backward compatibility */
+      
+    #define _BSD_SOURCE
+    #include <netdb.h>
+    void herror(const char * str);
+    const char *hstrerror(int err);
+		returns pointer tp h_errono error string corresponding to err
+	
+	
+	#include <netdb.h>
+	struct servent *getservbyname (const char *name, const cahr *proto);
+	struct servent *getservbyport(int port , const char *proto);
+		Both return pointer to a (staticallu allocated) servent structure on success, or NULL on not found or error;
+	 struct servent {
+               char  *s_name;       /* official service name */
+               char **s_aliases;    /* alias list */
+               int    s_port;       /* port number */
+               char  *s_proto;      /* protocol to use */
+           }
+
+unix 与internet domain socket 比较
+	编写只使用Internet domain socket 的应用程序通常是最简单的做法,因为这种应用程序既能运行在同一个主机上,也能运行在网络中的不同主机上.但之所以要选择使用UNIX DOMAIN socket是存在几个原因的
+		1.在一些实现上. unix domain socket的速度比Internet domain socket 的速度快
+		2.可以使用目录(在linux上是文件)权限对unix domain socket的访问来进行控制,这样只有运行与指定的用户或组ID下的应用程序才能够连接到一个监听流socket或向一个数据报socket发送一个数据报,同时为如何验证客户端提供了一个简单的方法
+			使用internet domain socket时如果需要验证客户端的话,需要做更多的工作了
+		3.使用Unix domain socket可以像后面61.13.3节中总结的那样传递打开的文件描述符和发送者的验证信息
+		
+     
+       
+
+	
+		
+
+
