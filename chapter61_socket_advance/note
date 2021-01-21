@@ -1,0 +1,146 @@
+流式套接字上的部分写和部分读
+
+shutdown 系统调用	
+	#include <sys/socket.h>
+	int shutdown(int sockfd, int how)
+		returns 0 on success, or -1 on error;
+	
+	how:
+		SHUT_RD;之后读操作返回文件结尾(0).数据任然可以写到套接字上.在unix域流式套接字上执行了SHUT_RD操作后,对端应用程序如果写入数据后,将收到SIGPIPE信号,伴随着EPIPE错误
+				对于TCP套接字来说,SHUT_RD没有意义
+		SHUT_WR:关闭连接的写端
+				一旦对端的应用程序已经将所有剩余的数据读取完毕,它就会检测到文件结尾.后续对本地套接字的写操作将会产生SIGPIPE信号以及EPIPE错误
+		SHUT_RDWR:
+			将连接的读端和写端都关闭
+	
+	shutdown和close的另一个重要区别是:无论该套接字上是否还关联其他的文件描述符,shutdown()都会关闭套接字通道
+		其表示shutdown是根据打开的文件描述来执行操作的,而close()是根据文件描述符来操作的
+			->
+				fd2 = dup(sockfd)
+				close(sockfd)
+					fd2还是可以继续进行io操作的
+			->
+				fd2 = dup(sockfd)
+				shutdown(sockfd, SHUT_RDWR);
+					fd2再也无法执行io操作了
+		需要注意的是:
+			shutdown并不会关闭文件描述符,就算how=SHUT_RDWR也不会关闭,需要调用close()来关闭文件描述符
+
+recv() 和 send()
+	#include <sys/types.h>
+       #include <sys/socket.h>
+
+       ssize_t recv(int sockfd, void *buf, size_t len, int flags);
+        returns numbers of bytes received, 0 on EOF, or -1 on error;
+       
+       ssize_t send(int sockfd, const void *buf, size_t len, int flags);
+		returns number of bytes sent, or -1 on error;
+	
+		对于recv
+		flags:
+			MSG_DONTWAIT
+			MSG_OOB
+			MSG_PEEK:从套接字缓冲区中获取一份请求字节的副本,但不会将请求的字节从缓冲区中实际移除.这份数据稍后可以由其他的recv()或read()调用获取
+			MSG_WAITALL:
+				在遇到下面情况,照样返回的字节数少于请求的字节
+					1.捕获到一个信号
+					2.流式套接字的对端终止了连接
+					3.遇到带外数据字节
+					4.从数据报套接字接收的消息长度小于length个字节
+					5.套接字上出现错误
+		对于send
+		flags:
+			MSG_DONTWAIT
+			MSG_MORE(从LINUX 2.4.4) -- 其对unix socket没有任何作用
+			MSG_NOSIGNAL
+			MSG_OOB:在流式套接字上发送带外数据
+		
+		#include <sys/sendfile.h>
+		sendfile(int out_fd, int in_fd, off_t *offset, size_t count);
+			returns number of bytes tranferred, or -1 on error;
+		out_fd必须指向一个套接字,in_fd指向的文件必须是可以进行mmap()操作的
+		
+TCP_CORK选项
+	optval = 1;
+	setsockopt(sockfd, IPPROTO_TCP,TCP_CORK, sizeof(optval));
+	write(sockfd, ...)
+	sendfile(sockfd, ...)
+	optval = 0;
+	setsockopt(sockfd, IPPROTO_TCP, TCP_CORK, sizeof(optval));
+
+	#include <sys/socket.h>
+	int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+	int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+
+
+TCP报文格式
+TCP序列号和确认机制
+TCP协议状态以及状态迁移图
+	LISTEN
+	SYN_SENT
+	SYN_RECV
+	ESTABLISHED
+	FIN_WAIT1
+	FIN_WAIT2
+	CLOSING
+	TIME_WAIT
+	CLOSE_WAIT
+	LAST_ACK
+TCP建立连接
+	3次握手
+TCP连接终止
+	4次挥手 --- MSL TIME_WAIT状态将持续4分钟
+
+netstat 
+
+tcpdump
+
+套接字选项
+	#include <sys/socket.h>
+	int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
+	int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
+		returns 0 on success,  or -1 on error;
+	找出套接字类型
+	int optval;
+	socklen_t optlen;
+	optlen = sizeof(optval);
+	if(getsockopt(sockfd, SOL_SOCKET, SO_TYPE, &optval, &optlen) == -1)
+		errExit("getsockopt");
+
+四元组
+	{local-ip-address, local-port, foreign-ip-address, foreign-port}
+
+SO_REUSEADDR
+	int sockfd, optval;
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if(sockfd == -1)
+		errExit("socket");
+	optval = 1;
+	if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1)
+		errExit("socket");
+	
+	bind(sockfd, &addr, addrlen);
+	listen(sockfd, backlog);
+
+在accept()中继承标记和选项
+	在linux上,如下这些属性是不会被accept()返回的新文件描述符所继承
+		1.向打开的文件描述相关的状态标记---即,可以通过fcntl()的F_SETFL操作所修改的标记,比如O_NONBLOCK,O_ASYNC
+		2.文件描述符标记 -- O_CLOEXEC
+		3.与信号驱动IO相关联的文件描述符属性
+	由accept()返回的新的描述符继承了大部分套接字选项,这些选项可以通过setsockopt()来设定
+
+高级功能
+	带外数据
+	sendmsg(),recvmsg()系统调用, -->其可以执行,分散,聚合IO,可以传送包含特定于域的辅助数据
+传递文件描述符
+	通过sendmsg()和recvmsg(),我们可以在同一台主机上通过unix域套接字将包含文件描述符的辅助数据从一个进程传递到另一个进程
+		虽然这种技术通常称为传递文件描述符,但实际上在两个进程间传递的是对同一个打开文件描述符的引用.在接收进程中使用的文件描述符号一般和发送进程中采用的文件描述符号不同
+
+接收发送端带外凭证
+	另一个使用辅助数据的例子是通过unix域套接字接收发送端的凭证
+
+循序数据报套接字
+	SOCK_SEQPACKET
+
+SCTP以及DCCP传输层协议
+	
