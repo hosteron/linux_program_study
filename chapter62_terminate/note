@@ -1,0 +1,112 @@
+	传统型终端和终端模拟器都需要同终端驱动程序相关联,由驱动程序负责处理设备上的输入和输出.(如果是终端模拟器,这里的设备就是一个伪终端)
+	当执行输入时,驱动程序可以工作在以下两种模式下:
+		1.规范模式
+		2.非规范模式--vi , more, less
+	 将终端置于非规范模式下的程序通常会禁止处理某些或者所有这些特殊字符
+	
+	如果一个进程产生输出的速度比终端驱动程序处理的速度还要快的话，内核会暂停执行写进程，直到输出队列的空间再次可用为止
+	在linux上，我们通过调用ioctl(fd, FIONREAD, &cnt)来获取终端输入队列中的未读取字节数
+
+获取和修改终端属性
+	#include <termios.h>
+	int tcgetattr(int fd ,  struct termios *termios_p);
+	int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
+		Both return 0 on success, or -1 on error;
+	struct termios{
+		tcflag_t c_iflag;
+		tcflag_t c_oflag;
+		tcflag_t c_cflag;
+		tcflag_t c_lflag;
+		cc_t	 c_line;
+		cc_t c_cc[NCCS];
+		speed_t c_ispeed;
+		speed_t c_ospeed;
+	};
+	
+	optional_actions
+	TCSANOW
+	TCSADRAIN
+		当所有当前处于队列中的输出已经传送到终端之后，修改得到生效，通常，该标志在修改影响终端的输出时才会指定，这样我们就不会影响到已经处于排队中，但还没有显示出来的输出数据
+	TCSAFLUSH
+		该标志的产生的效果同TCSADRAIN,但除此之外，当标志生效时那些仍然等待处理的输入数据都会被丢弃。这个特性很有用，比如，当读取一个密码时，此时我们希望关闭终端回显功能，并防止用户提前输入
+	如果任何一个对终端属性的修改请求可以执行的话，函数tcsetattr()将返回成功；它只会在没有任何修改请求能执行时才会返回失败。这意味着当我们修改多个属性时，有时可能有必要再调用一次tcgetattr()来获取新的终端属性，并同之前的修改请求做对比
+	
+	如果孤儿进程组中调用了tcsetattr(),tcflush(),tcflow(),tcsendbreak(),tcdrain()这些函数，都会失败，并返回EIO,因为在后台的进程调用这个，会导致这个进程组暂停，而孤儿进程组没有人监控它们，从而无法恢复，所以失败
+
+stty命令
+	stty -a
+	speed 38400 baud; rows 67; columns 204; line = 0;
+intr = ^C; quit = ^\; erase = ^?; kill = ^U; eof = ^D; eol = <undef>; eol2 = <undef>; swtch = <undef>; start = ^Q; stop = ^S; susp = ^Z; rprnt = ^R; werase = ^W; lnext = ^V; discard = ^O;
+min = 1; time = 0;
+-parenb -parodd -cmspar cs8 -hupcl -cstopb cread -clocal -crtscts
+-ignbrk -brkint -ignpar -parmrk -inpck -istrip -inlcr -igncr icrnl ixon -ixoff -iuclc -ixany -imaxbel iutf8
+opost -olcuc -ocrnl onlcr -onocr -onlret -ofill -ofdel nl0 cr0 tab0 bs0 vt0 ff0
+isig icanon iexten echo echoe echok -echonl -noflsh -xcase -tostop -echoprt echoctl echoke -flusho -extproc
+
+	我们可以采用如下的命令修改有关终端特殊字符的设定
+	stty intr ^L
+	当指定一个控制字符作为最后的命令行参数时，我们能够以多种方式来完成
+		1.以2个字符为序列，^跟着一个相关的字符（如上所示）
+		2.以8进程或16进制数来表示（014或0xC）
+		3.直接输入实际的字符本身
+		如果我们采用最后那种选择，且待处理的字符在shell或终端驱动程序中有着特别的含义，那么我们必须在其之前加上文本形式的next (literal next) 字符（通常ctl-V）
+		$ stty intr Control-V control-L
+	尽管不常见，但还是由可能将终端特殊字符定义为非控制字符
+	$stty intr q
+	要修改终端标志，例如TOSTOP标志，我们可以使用下列命令
+	stty tostop
+	stty -tostop
+	
+	我们可以输入下列字符序列，将终端标志和特殊字符还原到一个合理状态
+	control-j stty sane control-j
+	control-j字符才是真正的换行符（10进制ascii码为10）
+	
+	stty 命令工作于终端的标准输入之上，通过-F(关于权限检查)选项，我们可以监视并设定运行着stty命令的终端属性
+	stty -a -F /dev/tty3
+	
+	除了能够将终端特殊字符设定为指定的值之外，还可以通过将该值设定为fpathconf(fd, _PC_VDISABLE)的返回值来关闭该字符，在大多数的unix实现中，该调用返回0
+	
+	注意：
+		如果终端驱动程序这些特殊输入字符执行了特殊的解释，那么除了CR(回车), EOL,EOL2,以及NL(换行)之外，其他的字符都会被丢弃（即，不会将字符传给任何正在读取输入的进程）
+	
+	START和STOP字符
+		随着现在越来越普遍的高线速，软件流控已经被硬件流控（RTS/CTS）所取代。在硬件流控中，通过串口上两条不同线缆上发送的信号来开启或关闭数据流（RTS代表请求发送，CTS代表清楚发送）
+		
+	shell本身会控制这些终端标志。这表示如果我们试着用stty来检验这些设置的话，那么当输入shell命令时这些修改可能不会生效。若要绕过这个行为，我们必须在shell中进制命令行编辑。比如在启动bash时可以通过指定命令行选项--noediting来禁止命令行编辑功能
+
+终端的IO模式
+	规范模式
+		1.输入被装配成行
+		2.打开了行编辑功能
+		3.如果设定了IEXTEN标记，则REPRINT和LNEXT字符也都是可用的
+	非规范模式
+		关闭ICANON标记
+		termiios结构中的c_cc数组里由两个元素TIME, MIN； 通过VTIME(十分之一秒), VMIN来索引
+		MIN==0, TIME==0
+		MIN> 0 , TIME ==0
+		MIN == 0, TIME>0
+		MIN > 0, TIME > 0
+		 
+		 speed_t cfgetispeed(const struct termios *termios_p);
+
+       speed_t cfgetospeed(const struct termios *termios_p);
+
+       int cfsetispeed(struct termios *termios_p, speed_t speed);
+
+       int cfsetospeed(struct termios *termios_p, speed_t speed);
+       
+       
+        int tcsendbreak(int fd, int duration);
+
+       int tcdrain(int fd);  等待所有输出都被发送。
+
+       int tcflush(int fd, int queue_selector);
+
+       int tcflow(int fd, int action);
+       
+       ioctl(fd, TIOCGWINSZ, &ws)   SIGWINCH
+       struct winsize
+       
+       isatty(int fd)
+       
+       char *ttyname(int fd)
